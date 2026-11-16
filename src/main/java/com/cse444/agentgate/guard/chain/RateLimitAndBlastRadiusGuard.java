@@ -105,7 +105,7 @@ public class RateLimitAndBlastRadiusGuard implements InputCallGuard {
 
         // 3. Check write-call blast-radius cap per hour per agent (FR6)
         if (isWriteCall) {
-            int blastCap = config.getWriteBlastRadiusPerHour();
+            int blastCap = resolveAgentWriteBlastCap(agentId, toolName);
             Bucket writeBucket = writeBlastRadiusBuckets.computeIfAbsent(
                     agentId + ":writes:" + blastCap,
                     k -> Bucket.builder()
@@ -125,6 +125,15 @@ public class RateLimitAndBlastRadiusGuard implements InputCallGuard {
         minuteBuckets.clear();
         dailyQuotaBuckets.clear();
         writeBlastRadiusBuckets.clear();
+    }
+
+    private int resolveAgentWriteBlastCap(String agentId, String toolName) {
+        return limitRepository.findByAgentClientIdAndToolName(agentId, toolName)
+                .map(AgentToolLimitConfig::getWriteBlastRadiusPerHour)
+                .orElseGet(() -> limitRepository.findAllByAgentClientId(agentId).stream()
+                        .mapToInt(AgentToolLimitConfig::getWriteBlastRadiusPerHour)
+                        .max()
+                        .orElse(properties.limits().defaultWriteBlastRadiusPerHour()));
     }
 
     private AgentToolLimitConfig resolveLimits(String agentId, String toolName) {

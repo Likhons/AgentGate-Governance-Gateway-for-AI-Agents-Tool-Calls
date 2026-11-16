@@ -6,36 +6,37 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.networknt.schema.JsonSchema;
-import com.networknt.schema.JsonSchemaFactory;
-import com.networknt.schema.SpecVersion;
-import com.networknt.schema.ValidationMessage;
+import com.networknt.schema.Error;
+import com.networknt.schema.InputFormat;
+import com.networknt.schema.Schema;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.dialect.Dialects;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
  * Input Guard #1 (@Order(10)): JSON Schema Validation Guard (FR5, QA1, QA2).
  * Validates incoming tool call arguments against the tool's registered JSON Schema
  * and rejects undeclared/unexpected fields when properties are defined.
- * Caches compiled JsonSchema instances in Caffeine for sub-millisecond latency (QA2).
+ * Caches compiled Schema instances in Caffeine for sub-millisecond latency (QA2).
  */
 @Component
 @Order(10)
 public class JsonSchemaValidationGuard implements InputCallGuard {
 
     private final ObjectMapper objectMapper;
-    private final JsonSchemaFactory schemaFactory;
-    private final Cache<String, JsonSchema> compiledSchemaCache;
+    private final SchemaRegistry schemaRegistry;
+    private final Cache<String, Schema> compiledSchemaCache;
 
     public JsonSchemaValidationGuard(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
-        this.schemaFactory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
+        this.schemaRegistry = SchemaRegistry.withDialect(Dialects.getDraft202012());
         this.compiledSchemaCache = Caffeine.newBuilder()
                 .maximumSize(1000)
                 .expireAfterAccess(Duration.ofMinutes(30))
@@ -77,11 +78,12 @@ public class JsonSchemaValidationGuard implements InputCallGuard {
                 }
             }
 
-            JsonSchema schema = compiledSchemaCache.get(rawSchema, schemaFactory::getSchema);
-            Set<ValidationMessage> errors = schema.validate(argsNode);
+            Schema schema = compiledSchemaCache.get(rawSchema, key -> schemaRegistry.getSchema(key, InputFormat.JSON));
+            String argsJson = objectMapper.writeValueAsString(args);
+            List<Error> errors = schema.validate(argsJson, InputFormat.JSON);
             if (!errors.isEmpty()) {
                 String summary = errors.stream()
-                        .map(ValidationMessage::getMessage)
+                        .map(Error::getMessage)
                         .collect(Collectors.joining("; "));
                 throw new GuardRejectedException(
                         guardName(),

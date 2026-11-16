@@ -3,6 +3,7 @@ package com.cse444.agentgate.guard.domain;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -13,4 +14,6 @@ import java.util.UUID;
 public interface AgentToolLimitRepository extends JpaRepository<AgentToolLimitConfig, UUID> {
 
     Optional<AgentToolLimitConfig> findByAgentClientIdAndToolName(String agentClientId, String toolName);
+
+    List<AgentToolLimitConfig> findAllByAgentClientId(String agentClientId);
 }
