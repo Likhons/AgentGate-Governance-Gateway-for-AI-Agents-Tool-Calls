@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentgate-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agentgate}
+      POSTGRES_USER: ${POSTGRES_USER:-agentgate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentgate_dev_secret}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentgate} -d ${POSTGRES_DB:-agentgate}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: agentgate-redis
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "192mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  agentgate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentgate-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-agentgate}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agentgate}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-agentgate_dev_secret}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      AGENTGATE_SECURITY_JWT_SECRET: ${AGENTGATE_SECURITY_JWT_SECRET:-replace-with-256-bit-hmac-key-via-env-file}
+      AGENTGATE_AUDIT_HMAC_SECRET: ${AGENTGATE_AUDIT_HMAC_SECRET:-replace-with-audit-chain-hmac-secret-via-env}
+      AGENTGATE_ADMIN_USERNAME: ${AGENTGATE_ADMIN_USERNAME:-user}
+      AGENTGATE_ADMIN_PASSWORD: ${AGENTGATE_ADMIN_PASSWORD:-password}
+      AGENTGATE_APPROVER_USERNAME: ${AGENTGATE_APPROVER_USERNAME:-approver}
+      AGENTGATE_APPROVER_PASSWORD: ${AGENTGATE_APPROVER_PASSWORD:-approver-dev-pass}
+      AGENTGATE_AUDITOR_USERNAME: ${AGENTGATE_AUDITOR_USERNAME:-auditor}
+      AGENTGATE_AUDITOR_PASSWORD: ${AGENTGATE_AUDITOR_PASSWORD:-auditor-dev-pass}
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+
+  mock-downstream:
+    image: nginx:1.27-alpine
+    container_name: agentgate-mock-downstream
+    profiles: ["benchmark"]
+    volumes:
+      - ./load-tests/mock-downstream.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8081:8081"
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+
+volumes:
+  postgres_data:
