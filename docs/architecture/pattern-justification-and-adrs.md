@@ -56,7 +56,7 @@
   - *Positive:* Policy evaluation reads from an immutable `AtomicReference<PolicySnapshot>` in **< 0.15 ms** with zero lock contention and zero database queries on the hot path (QA2).
   - *Positive:* When PostgreSQL becomes unreachable during refresh, `policyStoreReachable` flips to `false`; `PolicyEngineService` immediately denies `MEDIUM` and `HIGH` risk tools (`QA4_FAIL_CLOSED_HIGH_OR_MEDIUM_RISK`) while allowing `LOW` risk tools to evaluate against the cached snapshot until `Duration.between(snapshot.loadedAt(), now) > 5m` (QA4).
   - *Negative:* Up to a 10-second propagation window between a database edit outside the API and the next scheduled poll (mitigated by triggering `refreshPolicySnapshot()` immediately on `POST /api/v1/policies` and `POST /api/v1/policies/reload`).
-- **Measured Evidence:** Implemented in `PolicyEngineService` and covered by `AgentGateQualityAttributesIntegrationTest#qa4FailSafeAvailabilityUnderPolicyStoreOutage` (Testcontainers execution pending Docker daemon startup).
+- **Measured Evidence:** Verified in `AgentGateQualityAttributesIntegrationTest#qa4FailSafeAvailabilityUnderPolicyStoreOutage` against Testcontainers PostgreSQL 16 + Redis 7.4 (test passed in 1.043 s): simulated DB outage blocks 100% of `MEDIUM`/`HIGH` calls while `LOW`-risk calls succeed from the cached snapshot with `evaluatedFromFailsafeCache = true`.
 
 ---
 
@@ -71,7 +71,7 @@
   - *Positive:* Because the listener runs in `AFTER_COMPLETION` with `Propagation.REQUIRES_NEW`, even tool calls that throw exceptions and roll back (e.g., blocked by policy, schema guard, rate limit, or kill switch) are permanently recorded in the audit trail.
   - *Positive:* Any direct SQL `UPDATE` or `DELETE` on `audit_log_entries` invalidates `entry_hash` or creates a `sequence_number`/`previous_hash` mismatch that `GET /api/v1/audit/verify` immediately flags with the exact tampered row ID (QA3).
   - *Negative:* Sequential hash chaining serializes audit row insertion order.
-- **Measured Evidence:** Implemented in `AuditTrailService` + `AuditHashChainCalculator` and covered by `AgentGateQualityAttributesIntegrationTest#qa3AuditTrailDetectsTampering` (Testcontainers execution pending Docker daemon startup).
+- **Measured Evidence:** Verified in `AgentGateQualityAttributesIntegrationTest#qa3AuditTrailDetectsTampering` against Testcontainers PostgreSQL 16 (test passed in 0.126 s): mutating a single column (`UPDATE audit_log_entries SET outcome = 'TAMPERED_OUTCOME'`) causes `verifyChainIntegrity()` to return `intact = false` and pinpoint the exact `firstTamperedEntryId`.
 
 ---
 
