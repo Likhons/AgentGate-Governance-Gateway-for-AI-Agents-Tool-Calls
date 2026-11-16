@@ -79,7 +79,8 @@ dependencies {
     // --- OpenAPI Documentation, OpenAPI Importer & JSON Schema Validator (C3, FR1, FR5) ---
     implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocVersion}"
     implementation 'io.swagger.parser.v3:swagger-parser:2.1.25'
-    implementation 'com.networknt:json-schema-validator:1.5.6'
+    implementation 'javax.xml.bind:jaxb-api:2.3.1'
+    implementation 'com.networknt:json-schema-validator:3.0.0'
 
     // --- Observability: Actuator, Micrometer & OpenTelemetry Tracing (C4) ---
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
