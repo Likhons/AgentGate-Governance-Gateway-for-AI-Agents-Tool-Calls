@@ -48,9 +48,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -74,6 +76,12 @@ class AgentGateQualityAttributesIntegrationTest {
     @Container
     @ServiceConnection
     static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16-alpine");
+
+    @Container
+    @ServiceConnection(name = "redis")
+    @SuppressWarnings("resource")
+    static GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7.4-alpine"))
+            .withExposedPorts(6379);
 
     private static HttpServer mockDownstreamServer;
     private static int mockPort;
@@ -263,9 +271,10 @@ class AgentGateQualityAttributesIntegrationTest {
                 2000
         ));
 
-        // Ensure support-bot has high throughput budget for QA1 200-call legitimate benchmark
-        guardPipelineService.upsertLimitConfig(new UpsertLimitConfigRequest("support-bot", "lookup_order", 500, 5000, 200));
-        guardPipelineService.upsertLimitConfig(new UpsertLimitConfigRequest("support-bot", "issue_refund", 500, 5000, 200));
+        // Ensure support-bot has high throughput budget for QA1 200-call legitimate benchmark & approval tests
+        guardPipelineService.upsertLimitConfig(new UpsertLimitConfigRequest("support-bot", "lookup_order", 500, 5000, 500));
+        guardPipelineService.upsertLimitConfig(new UpsertLimitConfigRequest("support-bot", "issue_refund", 500, 5000, 500));
+        guardPipelineService.upsertLimitConfig(new UpsertLimitConfigRequest("support-bot", "bulk_payout", 500, 5000, 500));
 
         // 3. Configure Baseline Policies (FR3)
         policyEngineService.createOrVersionPolicyRule(new CreatePolicyRuleRequest(
