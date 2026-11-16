@@ -1,0 +1,40 @@
+---
+name: agentgate-project-conventions
+description: Architectural rules, Spring Modulith boundaries, design pattern contracts, and coding conventions for CSE 444 Project 1 — AgentGate.
+---
+
+# AgentGate Project Skill & Architectural Rules
+
+Follow these mandatory conventions in every future session working on `com.cse444.agentgate`:
+
+## 1. Tech Stack & Runtime Rules
+- **Java & Spring Boot:** Java 21 with Virtual Threads enabled (`spring.threads.virtual.enabled: true`), Spring Boot `4.0.0`, Gradle (`build.gradle`).
+- **Memory Budget (C1):** All containers in `docker-compose.yml` must maintain explicit memory limits totaling `< 8 GB RAM` (currently `1.75 GB` across `postgres`, `redis`, and `agentgate`).
+- **Configuration & Secrets (C2):** Never hardcode credentials or signing keys. Bind all configuration through validated `@ConfigurationProperties(prefix = "agentgate")` records in `AgentGateProperties.java` backed by environment variables.
+- **API Quality (C3):**
+  - Every list endpoint MUST accept `Pageable` and return `Page<T>`.
+  - All request DTOs must use Jakarta Bean Validation (`@Valid`, `@NotBlank`, `@NotNull`, `@Min`, `@Max`).
+  - All errors must be translated into **RFC 9457 `ProblemDetail`** via `GlobalProblemDetailsHandler`.
+
+## 2. Spring Modulith & ArchUnit Boundary Rules (C6)
+- **Top-Level Modules (`com.cse444.agentgate.<module>`):**
+  - `shared`: `OPEN` module containing only shared value objects (`RiskLevel`, `ClearanceLevel`, `AgentCallIdentity`), domain events (`ToolCallAuditRecordedEvent`, `KillSwitchActivatedEvent`, `LimitBreachAlertEvent`), RFC 9457 exceptions, and `AgentGateProperties`.
+  - `registry`: Depends ONLY on `shared`.
+  - `identity`: Depends ONLY on `shared`.
+  - `policy`: Depends ONLY on `shared`, `registry`, `identity`.
+  - `guard`: Depends ONLY on `shared`, `registry`, `identity`.
+  - `approval`: Depends ONLY on `shared`, `registry`, `identity`.
+  - `audit`: Depends ONLY on `shared`. **NEVER** import or call any class in `..audit..` from any other module (`auditModuleMustBeEventDrivenAndNeverCalledDirectly`). Communicate with `audit` strictly by publishing `ToolCallAuditRecordedEvent`.
+  - `gateway`: Top-level orchestrator; depends on `shared`, `registry`, `identity`, `policy`, `guard`, `approval`. Core modules must NEVER depend upward on `gateway`.
+- **Controller Layer Rule:** `@RestController` classes must NEVER inject `@Repository` interfaces directly (`controllersMustNotAccessRepositoriesDirectly`).
+- **Named Interfaces:** Any subpackage of `registry`, `identity`, `policy`, `guard`, or `approval` exposed to another module must carry `@org.springframework.modulith.NamedInterface` in its `package-info.java`.
+
+## 3. Extensibility & Design Pattern Contracts
+- **Adding a New Input or Output Guard (FR5, FR6, C10):**
+  - Implement `InputCallGuard` or `OutputResultGuard` in `com.cse444.agentgate.guard.chain` with `@Component` and `@Order(n)`. Do NOT modify `GuardPipelineService` when adding a new guard.
+- **Adding a New Downstream Tool Protocol (FR1):**
+  - Implement `DownstreamToolAdapter` in `com.cse444.agentgate.registry.adapter`. `ResilientDownstreamInvoker` automatically wraps it with Resilience4j `CircuitBreaker` and `TimeLimiter`.
+- **Approval State Transitions (FR4, FR8):**
+  - All state mutations on `ApprovalRequest` must go through `ApprovalLifecycleState` (`PendingState` -> `TerminalApprovalState`).
+- **AI-Usage Log Tracker Rule:**
+  - Whenever correcting a mistake or missing requirement pointed out by the user, append `[AI Log Tracker: Recorded error {Error description} and fix {Fix description}]` at the end of the response and record it in `docs/QUICKSTART.md`.
