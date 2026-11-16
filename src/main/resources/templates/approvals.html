@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AgentGate — Human Approval Console (FR4)</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; background: #f8fafc; color: #0f172a; }
+        h1 { margin-bottom: 0.5rem; }
+        table { width: 100%; border-collapse: collapse; background: #fff; margin-top: 1rem; }
+        th, td { border: 1px solid #cbd5e1; padding: 0.65rem; text-align: left; font-size: 0.9rem; }
+        th { background: #f1f5f9; }
+        textarea { width: 100%; font-family: monospace; font-size: 0.85rem; }
+        .btn { padding: 0.4rem 0.75rem; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; }
+        .btn-approve { background: #16a34a; color: white; }
+        .btn-reject { background: #dc2626; color: white; }
+    </style>
+</head>
+<body>
+<h1>AgentGate — High-Risk Tool Approval Console (FR4)</h1>
+<p>Review paused high-risk tool calls. You may approve as-is, edit the JSON arguments before approving, or reject.</p>
+
+<table>
+    <thead>
+    <tr>
+        <th>ID</th>
+        <th>Agent</th>
+        <th>Delegated User</th>
+        <th>Tool</th>
+        <th>Arguments (Editable JSON)</th>
+        <th>Expires At</th>
+        <th>Actions</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr th:each="item : ${pendingApprovals.content}">
+        <td th:text="${item.id}"></td>
+        <td th:text="${item.agentClientId}"></td>
+        <td th:text="${item.delegatedUserId}"></td>
+        <td th:text="${item.toolName}"></td>
+        <td>
+            <textarea th:id="'args-' + ${item.id}" rows="3" th:text="${item.originalArgumentsJson}"></textarea>
+        </td>
+        <td th:text="${item.expiresAt}"></td>
+        <td>
+            <button class="btn btn-approve" th:onclick="'submitDecision(\'' + ${item.id} + '\', \'approve\')'">Approve / Save Edits</button>
+            <button class="btn btn-reject" th:onclick="'submitDecision(\'' + ${item.id} + '\', \'reject\')'">Reject</button>
+        </td>
+    </tr>
+    </tbody>
+</table>
+
+<script>
+    async function submitDecision(id, action) {
+        const rawArgs = document.getElementById('args-' + id).value;
+        const body = action === 'approve'
+            ? { note: 'Decided via Approval Web Console', editedArguments: JSON.parse(rawArgs) }
+            : { note: 'Rejected via Approval Web Console' };
+        await fetch(`/api/v1/approvals/${id}/${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        window.location.reload();
+    }
+</script>
+</body>
+</html>
