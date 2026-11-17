@@ -1,9 +1,11 @@
 package com.cse444.agentgate;
 
 import com.cse444.agentgate.approval.service.ApprovalWorkflowService;
+import com.cse444.agentgate.approval.web.ApprovalWebPageController;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallRequest;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallResponse;
 import com.cse444.agentgate.gateway.service.GatewayOrchestrationService;
+import com.cse444.agentgate.gateway.web.DashboardController;
 import com.cse444.agentgate.gateway.web.GatewayController;
 import com.cse444.agentgate.identity.service.AgentIdentityService;
 import com.cse444.agentgate.identity.web.AgentIdentityController;
@@ -43,6 +45,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -51,6 +54,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * OAuth2 JWT checks, Bean Validation, and RFC 9457 Problem Details (C3, FR2, FR3, FR8).
  */
 @WebMvcTest(controllers = {
+        DashboardController.class,
+        ApprovalWebPageController.class,
         GatewayController.class,
         PolicyController.class,
         AgentIdentityController.class
@@ -173,6 +178,19 @@ class WebSecurityAndProblemDetailsSliceTest {
                         .with(httpBasic("user", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("RELOADED"));
+    }
+
+    @Test
+    @DisplayName("Dashboard root renders publicly while HTML console challenges browsers with Basic realm")
+    void dashboardRootIsPublicAndBrowserConsolePromptsForBasicAuth() throws Exception {
+        mockMvc.perform(get("/"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/approvals/console")
+                        .accept(MediaType.TEXT_HTML))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("WWW-Authenticate", "Basic realm=\"AgentGate\""))
+                .andExpect(jsonPath("$.status").value(401));
     }
 
     private String issueTestJwt(String clientId, String delegatedUser) {

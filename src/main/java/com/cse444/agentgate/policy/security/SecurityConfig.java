@@ -52,6 +52,11 @@ public class SecurityConfig {
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
+                                "/",
+                                "/index.html",
+                                "/css/**",
+                                "/js/**",
+                                "/favicon.svg",
                                 "/oauth2/token",
                                 "/actuator/health",
                                 "/actuator/health/**",
@@ -78,6 +83,10 @@ public class SecurityConfig {
                 )
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) -> {
+                            String accept = request.getHeader("Accept");
+                            if (accept != null && accept.contains(MediaType.TEXT_HTML_VALUE)) {
+                                response.setHeader("WWW-Authenticate", "Basic realm=\"AgentGate\"");
+                            }
                             ProblemDetail problem = ProblemDetail.forStatusAndDetail(
                                     HttpStatus.UNAUTHORIZED, authException.getMessage());
                             problem.setTitle("Authentication Required");
