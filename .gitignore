@@ -1,10 +1,35 @@
+# Build & Gradle
 .gradle/
 build/
+bin/
+out/
 !gradle/wrapper/gradle-wrapper.jar
+
+# Environment & Secrets (never commit real .env or keys)
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.secrets.*
+secrets.*
+application-local.*
+application-prod.*
+
+# Logs & OS
 *.log
+.DS_Store
+Thumbs.db
+
+# IDE files
 .idea/
 *.iml
 .vscode/
-.DS_Store
-Thumbs.db
+.settings/
+.classpath
+.project
