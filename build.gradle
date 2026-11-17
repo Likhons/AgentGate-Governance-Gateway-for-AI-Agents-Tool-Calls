@@ -36,8 +36,9 @@ dependencyManagement {
 }
 
 dependencies {
-    // --- Core Web (Spring MVC + Virtual Threads) & Validation (C1, C2, C3) ---
+    // --- Core Web (Spring MVC + Virtual Threads), RestClient & Validation (C1, C2, C3) ---
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
     annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'

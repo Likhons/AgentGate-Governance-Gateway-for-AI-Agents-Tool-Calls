@@ -4,7 +4,7 @@ WORKDIR /workspace
 COPY gradlew settings.gradle build.gradle ./
 COPY gradle ./gradle
 COPY src ./src
-RUN chmod +x gradlew && ./gradlew bootJar --no-daemon -x test
+RUN sed -i 's/\r$//' gradlew && chmod +x gradlew && ./gradlew bootJar --no-daemon -x test
 
 # Stage 2: Minimal JRE 21 Runtime tuned for <8GB RAM constraint (C1)
 FROM eclipse-temurin:21-jre-alpine
@@ -13,4 +13,4 @@ RUN addgroup -S agentgate && adduser -S agentgate -G agentgate
 USER agentgate
 COPY --from=builder /workspace/build/libs/*.jar app.jar
 EXPOSE 8080
-ENTRYPOINT ["java", "-XX:+UseZGC", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-XX:+UseG1GC", "-Xms128m", "-Xmx512m", "-XX:MaxGCPauseMillis=10", "-jar", "app.jar"]
