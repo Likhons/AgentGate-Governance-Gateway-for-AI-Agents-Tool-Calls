@@ -22,14 +22,15 @@
     - `PolicyAndConditionUnitTest`: 2/2 passed
     - `WebSecurityAndProblemDetailsSliceTest`: 4/4 passed
     - `AgentGateQualityAttributesIntegrationTest`: 9/9 passed (30 malicious calls 100% blocked/held, 200/200 legitimate calls passed, MCP + REST adapters, CircuitBreaker hiding downed tool, OAuth2 HTTP token + gateway call, Policy versioning/dry-run/playground, Approval edit/approve/reject/timeout, write blast-radius cap, CSV export, `/actuator/health` UP, `/v3/api-docs` 200, QA3 tampering detection, QA4 fail-safe outage, QA5 OpenAPI import + kill switches).
-- **Step 8 — Incremental Git History (C11):**
-  - Initialized `git` on `main` with incremental module-by-module commits (`chore`, `feat`, `fix`, `test`, `docs`).
+- **Step 8 — Incremental Git History & Live Docker/k6 Benchmark Evidence (C9, C11):**
+  - Initialized `git` on `main` and pushed incremental commits to `origin/main` with `.env`/key ignores.
+  - Executed live Docker Compose benchmark (`postgres`, `redis`, `agentgate`, `mock-downstream`), diagnosed & resolved QA2 `59.88 s` HikariCP/audit/ZGC bottleneck, re-ran both `qa2_gateway_latency.k6.js` (**`5 ms` p95 overhead, `17.29 ms` p95 HTTP, `5,977/5,977` `100.00%` pass**) and `qa1_security_suite.k6.js` (**`30/30` malicious blocked, `200/200` legitimate pass**), verified `6,207` hash-chained audit entries (`intact: true`) + OpenAPI import (`qa5_get_order`) + `docker stats` (`712.3 MiB` post-load), and authored [EVIDENCE_REPORT.md](file:///e:/Assignment/docs/EVIDENCE_REPORT.md).
 
 ## 2. Current State of the Application
-- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **25/25 passing**.
-- All code and test changes are committed cleanly on `main`.
+- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **25/25 passing** (`0` failures, `0` skipped).
+- Live Docker Compose + `grafana/k6` benchmark suite passes **QA1 (`100%`)**, **QA2 (`p(95) = 5 ms` overhead @ 100 RPS)**, **QA3 (`6,207/6,207` intact)**, **QA4 (Testcontainers verified)**, **QA5 (live OpenAPI import verified)**, and **C1 (`712.3 MiB` total stack RAM < `8 GB`)**.
+- All evidence, ADRs, AI-Usage Log entries (Cases 1–10), and optimization fixes are documented and committed cleanly on `main`.
 
 ## 3. Immediate Next Steps for Next Session (TODOs)
-1. **Execute Full Docker Compose & k6 Benchmark Run (Requirement C9):** Run `docker compose --profile benchmark up --build -d`, execute `load-tests/qa1_security_suite.k6.js` and `load-tests/qa2_gateway_latency.k6.js` (via `grafana/k6` or `k6`), capture `docker stats`, raw outputs, and latency summary into `docs/EVIDENCE_REPORT.md`, and update `ADR-001` / `ADR-002` measured evidence in `docs/architecture/pattern-justification-and-adrs.md`.
-2. **Mid-Project Checkpoint Change Request (Requirement C10):** When the instructor issues the checkpoint change request, implement it as a new pluggable bean/module with zero edits to core orchestrators, and log touched files.
-3. **Live Defence Preparation (Requirement C12):** Rehearse the 15-minute walkthrough of `ADR-003` and `ADR-004` plus on-the-spot modification drill.
+1. **Mid-Project Checkpoint Change Request (Requirement C10):** When the instructor issues the checkpoint change request, implement it as a new pluggable bean/module with zero edits to core orchestrators, and log touched files.
+2. **Live Defence Preparation (Requirement C12):** Rehearse the 15-minute walkthrough of `ADR-001`–`ADR-004`, [EVIDENCE_REPORT.md](file:///e:/Assignment/docs/EVIDENCE_REPORT.md), and on-the-spot modification drill.
