@@ -6,7 +6,10 @@ import com.cse444.agentgate.identity.dto.AgentClientResponse;
 import com.cse444.agentgate.identity.dto.RegisterAgentRequest;
 import com.cse444.agentgate.shared.config.AgentGateProperties;
 import com.cse444.agentgate.shared.domain.AgentCallIdentity;
+import com.cse444.agentgate.shared.domain.ClearanceLevel;
 import com.cse444.agentgate.shared.event.KillSwitchActivatedEvent;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.persistence.EntityNotFoundException;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -20,6 +23,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -31,11 +35,17 @@ import java.util.UUID;
 @Service
 public class AgentIdentityService {
 
+    private record CachedAgentSnapshot(String clientId, boolean enabled, ClearanceLevel clearanceLevel) {}
+
     private final AgentClientRepository agentRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtEncoder jwtEncoder;
     private final AgentGateProperties properties;
     private final ApplicationEventPublisher eventPublisher;
+    private final Cache<String, CachedAgentSnapshot> agentCache = Caffeine.newBuilder()
+            .maximumSize(2000)
+            .expireAfterWrite(Duration.ofSeconds(10))
+            .build();
 
     public AgentIdentityService(
             AgentClientRepository agentRepository,
@@ -65,7 +75,9 @@ public class AgentIdentityService {
                 request.clearanceLevel(),
                 request.scopes()
         );
-        return AgentClientResponse.from(agentRepository.save(agent));
+        AgentClient saved = agentRepository.save(agent);
+        agentCache.invalidate(saved.getClientId());
+        return AgentClientResponse.from(saved);
     }
 
     /**
@@ -118,19 +130,38 @@ public class AgentIdentityService {
 
     @Transactional(readOnly = true)
     public AgentCallIdentity verifyAndResolveAgentIdentity(String clientId, String delegatedUserId) {
-        AgentClient agent = agentRepository.findByClientId(clientId)
-                .orElseThrow(() -> new EntityNotFoundException("Registered agent client not found: " + clientId));
-        if (!agent.isEnabled()) {
+        CachedAgentSnapshot agent = getCachedSnapshot(clientId);
+        if (agent == null) {
+            throw new EntityNotFoundException("Registered agent client not found: " + clientId);
+        }
+        if (!agent.enabled()) {
             throw new IllegalStateException("Agent '" + clientId + "' is disabled by Kill Switch (FR8)");
         }
-        return new AgentCallIdentity(agent.getClientId(), delegatedUserId, agent.getClearanceLevel());
+        return new AgentCallIdentity(agent.clientId(), delegatedUserId, agent.clearanceLevel());
     }
 
     @Transactional(readOnly = true)
     public boolean isAgentEnabled(String clientId) {
+        CachedAgentSnapshot agent = getCachedSnapshot(clientId);
+        return agent != null && agent.enabled();
+    }
+
+    private CachedAgentSnapshot getCachedSnapshot(String clientId) {
+        if (clientId == null || clientId.isBlank()) {
+            return null;
+        }
+        CachedAgentSnapshot cached = agentCache.getIfPresent(clientId);
+        if (cached != null) {
+            return cached;
+        }
         return agentRepository.findByClientId(clientId)
-                .map(AgentClient::isEnabled)
-                .orElse(false);
+                .map(found -> {
+                    CachedAgentSnapshot snapshot = new CachedAgentSnapshot(
+                            found.getClientId(), found.isEnabled(), found.getClearanceLevel());
+                    agentCache.put(clientId, snapshot);
+                    return snapshot;
+                })
+                .orElse(null);
     }
 
     @Transactional(readOnly = true)
@@ -148,6 +179,7 @@ public class AgentIdentityService {
                 .orElseThrow(() -> new EntityNotFoundException("Agent not found: " + clientId));
         agent.disable();
         AgentClient saved = agentRepository.save(agent);
+        agentCache.invalidate(clientId);
 
         eventPublisher.publishEvent(new KillSwitchActivatedEvent(
                 KillSwitchActivatedEvent.Scope.AGENT,
@@ -164,6 +196,8 @@ public class AgentIdentityService {
         AgentClient agent = agentRepository.findByClientId(clientId)
                 .orElseThrow(() -> new EntityNotFoundException("Agent not found: " + clientId));
         agent.enable();
-        return AgentClientResponse.from(agentRepository.save(agent));
+        AgentClient saved = agentRepository.save(agent);
+        agentCache.invalidate(saved.getClientId());
+        return AgentClientResponse.from(saved);
     }
 }

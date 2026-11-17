@@ -10,6 +10,8 @@ import com.cse444.agentgate.registry.dto.RegisterToolRequest;
 import com.cse444.agentgate.registry.dto.ToolResponse;
 import com.cse444.agentgate.shared.domain.ToolStatus;
 import com.cse444.agentgate.shared.event.KillSwitchActivatedEvent;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.annotation.PostConstruct;
 import jakarta.persistence.EntityNotFoundException;
 import org.springframework.context.ApplicationEventPublisher;
@@ -18,6 +20,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +41,10 @@ public class ToolRegistryService {
 
     // In-memory fast flag synced with DB for sub-millisecond write-kill-switch checks (QA2)
     private final AtomicBoolean allWriteToolsDisabled = new AtomicBoolean(false);
+    private final Cache<String, RegisteredTool> toolCache = Caffeine.newBuilder()
+            .maximumSize(2000)
+            .expireAfterWrite(Duration.ofSeconds(10))
+            .build();
 
     public ToolRegistryService(
             RegisteredToolRepository toolRepository,
@@ -91,6 +98,7 @@ public class ToolRegistryService {
                 ));
 
         RegisteredTool saved = toolRepository.save(tool);
+        toolCache.invalidate(saved.getName());
         return toToolResponse(saved);
     }
 
@@ -117,8 +125,14 @@ public class ToolRegistryService {
 
     @Transactional(readOnly = true)
     public RegisteredTool getRequiredToolByName(String toolName) {
-        return toolRepository.findByName(toolName)
+        RegisteredTool cached = toolCache.getIfPresent(toolName);
+        if (cached != null) {
+            return cached;
+        }
+        RegisteredTool found = toolRepository.findByName(toolName)
                 .orElseThrow(() -> new EntityNotFoundException("Tool not found: " + toolName));
+        toolCache.put(toolName, found);
+        return found;
     }
 
     /**
@@ -127,9 +141,11 @@ public class ToolRegistryService {
      */
     @Transactional
     public ToolResponse disableTool(String toolName, String reason, String adminActor) {
-        RegisteredTool tool = getRequiredToolByName(toolName);
+        RegisteredTool tool = toolRepository.findByName(toolName)
+                .orElseThrow(() -> new EntityNotFoundException("Tool not found: " + toolName));
         tool.disable();
         RegisteredTool saved = toolRepository.save(tool);
+        toolCache.invalidate(toolName);
 
         eventPublisher.publishEvent(new KillSwitchActivatedEvent(
                 KillSwitchActivatedEvent.Scope.TOOL,
@@ -143,9 +159,12 @@ public class ToolRegistryService {
 
     @Transactional
     public ToolResponse enableTool(String toolName) {
-        RegisteredTool tool = getRequiredToolByName(toolName);
+        RegisteredTool tool = toolRepository.findByName(toolName)
+                .orElseThrow(() -> new EntityNotFoundException("Tool not found: " + toolName));
         tool.enable();
-        return toToolResponse(toolRepository.save(tool));
+        RegisteredTool saved = toolRepository.save(tool);
+        toolCache.invalidate(toolName);
+        return toToolResponse(saved);
     }
 
     /**
@@ -176,12 +195,8 @@ public class ToolRegistryService {
         }
     }
 
-    @Transactional(readOnly = true)
     public boolean isAllWriteToolsKilled() {
-        return allWriteToolsDisabled.get() || killSwitchRepository
-                .findById(GlobalKillSwitchState.ALL_WRITE_TOOLS_KEY)
-                .map(GlobalKillSwitchState::isActive)
-                .orElse(false);
+        return allWriteToolsDisabled.get();
     }
 
     /**

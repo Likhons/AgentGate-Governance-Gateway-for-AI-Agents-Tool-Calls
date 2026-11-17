@@ -27,7 +27,6 @@ import org.slf4j.MDC;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Map;
@@ -79,7 +78,6 @@ public class GatewayOrchestrationService {
         this.tracerProvider = tracerProvider;
     }
 
-    @Transactional
     public GatewayToolCallResponse processToolCall(
             String authenticatedClientId,
             GatewayToolCallRequest request

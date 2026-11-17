@@ -5,15 +5,20 @@ import com.cse444.agentgate.audit.domain.AuditLogRepository;
 import com.cse444.agentgate.audit.dto.AuditChainVerificationReport;
 import com.cse444.agentgate.audit.dto.AuditLogResponse;
 import com.cse444.agentgate.shared.event.ToolCallAuditRecordedEvent;
+import jakarta.annotation.PreDestroy;
 import jakarta.persistence.criteria.Predicate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -21,81 +26,195 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Tamper-Evident Audit Trail Service (FR7, QA3).
- * Design Pattern: Observer Pattern via @TransactionalEventListener.
- * Listens for ToolCallAuditRecordedEvent, chains each entry to the previous entry's hash,
- * supports multi-attribute search & export, and verifies chain integrity on demand.
+ * Design Pattern: Observer Pattern via @TransactionalEventListener + Ordered Single-Writer Batch Chain.
+ * Enqueues ToolCallAuditRecordedEvent without blocking gateway latency or pinning Java 21 Virtual Threads,
+ * persists sequential HMAC-SHA256 hash-chained batches in deterministic order inside TransactionTemplate,
+ * and flushes pending events prior to auditor search, export, or integrity verification.
  */
 @Service
 public class AuditTrailService {
 
+    private static final Logger log = LoggerFactory.getLogger(AuditTrailService.class);
+    private static final int MAX_BATCH_SIZE = 128;
+
     private final AuditLogRepository auditRepository;
     private final AuditHashChainCalculator hashCalculator;
+    private final TransactionTemplate requiresNewTxTemplate;
+
+    private final ConcurrentLinkedQueue<ToolCallAuditRecordedEvent> pendingQueue = new ConcurrentLinkedQueue<>();
+    private final ExecutorService auditWriterExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "agentgate-audit-writer");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final ReentrantLock writerLock = new ReentrantLock();
+
+    private long cachedLastSequence = -1L;
+    private String cachedLastHash = AuditLogEntry.GENESIS_HASH;
 
     public AuditTrailService(
             AuditLogRepository auditRepository,
-            AuditHashChainCalculator hashCalculator
+            AuditHashChainCalculator hashCalculator,
+            PlatformTransactionManager transactionManager
     ) {
         this.auditRepository = auditRepository;
         this.hashCalculator = hashCalculator;
+        this.requiresNewTxTemplate = new TransactionTemplate(transactionManager);
+        this.requiresNewTxTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
-     * FR7: Records every tool call via @TransactionalEventListener.
-     * Synchronized hash-chain append ensures strict sequential linking of previousHash -> entryHash.
+     * FR7: Enqueues every tool call event for sequential HMAC-SHA256 hash-chain persistence.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMPLETION, fallbackExecution = true)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public synchronized AuditLogResponse recordAuditEvent(ToolCallAuditRecordedEvent event) {
-        Optional<AuditLogEntry> latest = auditRepository.findTopByOrderBySequenceNumberDesc();
-        long nextSeq = latest.map(e -> e.getSequenceNumber() + 1L).orElse(1L);
-        String previousHash = latest.map(AuditLogEntry::getEntryHash).orElse(AuditLogEntry.GENESIS_HASH);
+    public void recordAuditEvent(ToolCallAuditRecordedEvent event) {
+        if (event == null) {
+            return;
+        }
+        pendingQueue.add(event);
+        if (!auditWriterExecutor.isShutdown()) {
+            auditWriterExecutor.execute(this::drainBatchSafely);
+        }
+    }
 
-        // Truncate timestamp to milliseconds so PostgreSQL TIMESTAMPTZ round-trip is identical
-        Instant truncatedOccurredAt = (event.occurredAt() != null ? event.occurredAt() : Instant.now())
-                .truncatedTo(ChronoUnit.MILLIS);
-        UUID entryId = event.eventId() != null ? event.eventId() : UUID.randomUUID();
+    /**
+     * Ensures all queued audit events are committed to PostgreSQL before reads/verification.
+     */
+    public void flushPendingAudits() {
+        if (auditWriterExecutor.isShutdown()) {
+            drainAllRemainingSafely();
+            return;
+        }
+        CompletableFuture.runAsync(this::drainAllRemainingSafely, auditWriterExecutor).join();
+    }
 
-        String entryHash = hashCalculator.computeEntryHash(
-                nextSeq,
-                entryId,
-                event.traceId(),
-                event.agentClientId(),
-                event.delegatedUserId(),
-                event.toolName(),
-                event.redactedArgumentsJson(),
-                event.policyRuleName(),
-                event.policyRuleVersion(),
-                event.approvalId(),
-                event.approvalState(),
-                event.outcome(),
-                event.latencyMs(),
-                truncatedOccurredAt,
-                previousHash
-        );
+    @PreDestroy
+    public void shutdown() {
+        drainAllRemainingSafely();
+        auditWriterExecutor.shutdown();
+    }
 
-        AuditLogEntry entry = new AuditLogEntry(
-                entryId,
-                nextSeq,
-                event.traceId(),
-                event.agentClientId(),
-                event.delegatedUserId(),
-                event.toolName(),
-                event.redactedArgumentsJson(),
-                event.policyRuleName(),
-                event.policyRuleVersion(),
-                event.approvalId(),
-                event.approvalState(),
-                event.outcome(),
-                event.latencyMs(),
-                truncatedOccurredAt,
-                previousHash,
-                entryHash
-        );
+    private void drainBatchSafely() {
+        if (pendingQueue.isEmpty()) {
+            return;
+        }
+        writerLock.lock();
+        try {
+            List<ToolCallAuditRecordedEvent> batch = drainUpTo(MAX_BATCH_SIZE);
+            if (!batch.isEmpty()) {
+                persistHashChainedBatch(batch);
+            }
+        } catch (Exception ex) {
+            resetTailCache();
+            log.error("Failed to persist audit batch: {}", ex.getMessage(), ex);
+        } finally {
+            writerLock.unlock();
+        }
+    }
 
-        return AuditLogResponse.from(auditRepository.saveAndFlush(entry));
+    private void drainAllRemainingSafely() {
+        writerLock.lock();
+        try {
+            while (!pendingQueue.isEmpty()) {
+                List<ToolCallAuditRecordedEvent> batch = drainUpTo(MAX_BATCH_SIZE);
+                if (!batch.isEmpty()) {
+                    persistHashChainedBatch(batch);
+                }
+            }
+        } catch (Exception ex) {
+            resetTailCache();
+            log.error("Failed to flush remaining audit entries: {}", ex.getMessage(), ex);
+        } finally {
+            writerLock.unlock();
+        }
+    }
+
+    private List<ToolCallAuditRecordedEvent> drainUpTo(int max) {
+        List<ToolCallAuditRecordedEvent> batch = new ArrayList<>(Math.min(max, 16));
+        for (int i = 0; i < max; i++) {
+            ToolCallAuditRecordedEvent item = pendingQueue.poll();
+            if (item == null) {
+                break;
+            }
+            batch.add(item);
+        }
+        return batch;
+    }
+
+    private void persistHashChainedBatch(List<ToolCallAuditRecordedEvent> batch) {
+        requiresNewTxTemplate.executeWithoutResult(status -> {
+            if (cachedLastSequence < 0L) {
+                Optional<AuditLogEntry> latest = auditRepository.findTopByOrderBySequenceNumberDesc();
+                cachedLastSequence = latest.map(AuditLogEntry::getSequenceNumber).orElse(0L);
+                cachedLastHash = latest.map(AuditLogEntry::getEntryHash).orElse(AuditLogEntry.GENESIS_HASH);
+            }
+
+            List<AuditLogEntry> entries = new ArrayList<>(batch.size());
+            long seq = cachedLastSequence;
+            String prevHash = cachedLastHash;
+
+            for (ToolCallAuditRecordedEvent event : batch) {
+                seq++;
+                Instant truncatedOccurredAt = (event.occurredAt() != null ? event.occurredAt() : Instant.now())
+                        .truncatedTo(ChronoUnit.MILLIS);
+                UUID entryId = event.eventId() != null ? event.eventId() : UUID.randomUUID();
+
+                String entryHash = hashCalculator.computeEntryHash(
+                        seq,
+                        entryId,
+                        event.traceId(),
+                        event.agentClientId(),
+                        event.delegatedUserId(),
+                        event.toolName(),
+                        event.redactedArgumentsJson(),
+                        event.policyRuleName(),
+                        event.policyRuleVersion(),
+                        event.approvalId(),
+                        event.approvalState(),
+                        event.outcome(),
+                        event.latencyMs(),
+                        truncatedOccurredAt,
+                        prevHash
+                );
+
+                entries.add(new AuditLogEntry(
+                        entryId,
+                        seq,
+                        event.traceId(),
+                        event.agentClientId(),
+                        event.delegatedUserId(),
+                        event.toolName(),
+                        event.redactedArgumentsJson(),
+                        event.policyRuleName(),
+                        event.policyRuleVersion(),
+                        event.approvalId(),
+                        event.approvalState(),
+                        event.outcome(),
+                        event.latencyMs(),
+                        truncatedOccurredAt,
+                        prevHash,
+                        entryHash
+                ));
+                prevHash = entryHash;
+            }
+
+            auditRepository.saveAllAndFlush(entries);
+            cachedLastSequence = seq;
+            cachedLastHash = prevHash;
+        });
+    }
+
+    private void resetTailCache() {
+        cachedLastSequence = -1L;
+        cachedLastHash = AuditLogEntry.GENESIS_HASH;
     }
 
     /**
@@ -104,6 +223,7 @@ public class AuditTrailService {
      */
     @Transactional(readOnly = true)
     public AuditChainVerificationReport verifyChainIntegrity() {
+        flushPendingAudits();
         List<AuditLogEntry> allEntries = auditRepository.findAllByOrderBySequenceNumberAsc();
         String expectedPreviousHash = AuditLogEntry.GENESIS_HASH;
         long expectedSeq = 1L;
@@ -188,6 +308,7 @@ public class AuditTrailService {
             String policyRuleName,
             Pageable pageable
     ) {
+        flushPendingAudits();
         Specification<AuditLogEntry> spec = buildSearchSpecification(
                 agentClientId, delegatedUserId, toolName, outcome, policyRuleName);
         return auditRepository.findAll(spec, pageable).map(AuditLogResponse::from);
@@ -203,6 +324,7 @@ public class AuditTrailService {
             String toolName,
             String outcome
     ) {
+        flushPendingAudits();
         Specification<AuditLogEntry> spec = buildSearchSpecification(
                 agentClientId, delegatedUserId, toolName, outcome, null);
         List<AuditLogEntry> rows = auditRepository.findAll(spec);
