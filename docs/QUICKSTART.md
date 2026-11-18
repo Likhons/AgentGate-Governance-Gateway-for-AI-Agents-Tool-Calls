@@ -87,6 +87,9 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/gateway/appr
 curl -u user:password http://localhost:8080/api/v1/audit/verify
 ```
 
+New and edited tools appear on the MCP endpoint within `agentgate.mcp.tool-sync-interval` (5 s)
+without a restart; a tool kill switch withdraws the tool immediately (FR1, FR8, FR10).
+
 ---
 
 ## Part 2: AI-Usage Log (Requirement C11)
@@ -140,3 +143,6 @@ curl -u user:password http://localhost:8080/api/v1/audit/verify
 12. **Case 12 — Approver Webhook URL Supplied by the Agent (`FR4`, `QA1`):**
     - *Issue Found:* `GatewayToolCallRequest.approvalWebhookUrl` let the calling agent choose where the gateway POSTs approval notifications, so a prompt-injected agent could exfiltrate unredacted arguments or make the gateway call internal hosts (SSRF); without that field no approver webhook was sent at all, approvers were never told how a request ended, and `agentgate.approval.webhook-timeout` was never applied.
     - *Fix Applied:* Removed the field from the agent request; the URL now comes from the administrator-set `approvalWebhookUrl` on the tool (`RegisterToolRequest` / `OpenApiImportRequest`, `V8`) or `AGENTGATE_APPROVAL_WEBHOOK_URL`. `ApprovalWebhookNotifier` redacts arguments, applies the configured timeout, sends only after the transaction commits, and adds an `approval.resolved` webhook for approve, reject, timeout and kill-switch outcomes. Covered by `fr4ApproverWebhooksUseToolConfiguredUrlWithRedactedArguments`.
+13. **Case 13 — MCP Tool List Frozen at Startup (`FR1`, `FR8`, `FR10`, `QA5`):**
+    - *Issue Found:* Spring AI reads `ToolCallbackProvider` beans once at startup, so tools registered or imported later never appeared on the MCP endpoint and killed or circuit-open tools stayed listed until a restart; only the custom REST `/mcp/tools` view was live.
+    - *Fix Applied:* Replaced the startup-only provider with `McpToolListSynchronizer`, which reconciles the live `McpSyncServer` (`addTool`/`removeTool`, which emit `notifications/tools/list_changed`) every `agentgate.mcp.tool-sync-interval` and immediately on tool/write kill switches. Covered by `fr1McpServerToolListFollowsRegistryAtRuntime`.

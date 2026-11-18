@@ -89,3 +89,6 @@ agentgate:
     default-write-blast-radius-per-hour: 20
   audit:
     hmac-secret: ${AGENTGATE_AUDIT_HMAC_SECRET:dev-only-override-in-env-audit-hmac-key}
+  mcp:
+    # How often the live MCP tool list is reconciled with the registry (FR1, FR10)
+    tool-sync-interval: 5s

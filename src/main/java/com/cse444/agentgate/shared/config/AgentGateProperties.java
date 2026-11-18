@@ -21,7 +21,8 @@ public record AgentGateProperties(
         @Valid @NotNull ApprovalProperties approval,
         @Valid @NotNull GuardProperties guards,
         @Valid @NotNull LimitProperties limits,
-        @Valid @NotNull AuditProperties audit
+        @Valid @NotNull AuditProperties audit,
+        @Valid @NotNull McpProperties mcp
 ) {
 
     public record SecurityProperties(
@@ -65,5 +66,13 @@ public record AgentGateProperties(
 
     public record AuditProperties(
             @NotBlank String hmacSecret
+    ) {}
+
+    /**
+     * @param toolSyncInterval how often the live MCP server tool list is reconciled with the
+     *                         registry (new, killed and circuit-open tools) (FR1, FR10)
+     */
+    public record McpProperties(
+            @NotNull Duration toolSyncInterval
     ) {}
 }

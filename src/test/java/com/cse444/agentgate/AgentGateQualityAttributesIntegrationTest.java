@@ -10,6 +10,7 @@ import com.cse444.agentgate.gateway.dto.AgentApprovalResultResponse;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallRequest;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallResponse;
 import com.cse444.agentgate.gateway.service.GatewayOrchestrationService;
+import com.cse444.agentgate.gateway.service.McpToolListSynchronizer;
 import com.cse444.agentgate.guard.dto.UpsertLimitConfigRequest;
 import com.cse444.agentgate.guard.service.GuardPipelineService;
 import com.cse444.agentgate.identity.dto.RegisterAgentRequest;
@@ -34,6 +35,8 @@ import com.cse444.agentgate.shared.domain.RiskLevel;
 import com.cse444.agentgate.shared.domain.ToolType;
 import com.cse444.agentgate.shared.error.LimitExceededException;
 import com.sun.net.httpserver.HttpServer;
+import io.modelcontextprotocol.server.McpSyncServer;
+import io.modelcontextprotocol.spec.McpSchema;
 import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -122,6 +125,12 @@ class AgentGateQualityAttributesIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private McpSyncServer mcpSyncServer;
+
+    @Autowired
+    private McpToolListSynchronizer mcpToolListSynchronizer;
 
     private static boolean initialized = false;
 
@@ -935,6 +944,42 @@ class AgentGateQualityAttributesIntegrationTest {
         assertThat(awaitApproverWebhook("approval.resolved", held.approvalId()))
                 .contains("\"state\":\"REJECTED\"")
                 .contains("\"decidedBy\":\"senior-approver\"");
+    }
+
+    @Test
+    @DisplayName("FR1/FR8 Live MCP Tool List: tools registered after startup appear and killed tools disappear without a restart")
+    void fr1McpServerToolListFollowsRegistryAtRuntime() {
+        toolRegistryService.registerOrUpdateTool(new RegisterToolRequest(
+                "mcp_sync_probe",
+                "Tool registered after the MCP server started",
+                "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}}}",
+                RiskLevel.LOW,
+                "PlatformTeam",
+                ToolType.REST,
+                false,
+                "http://127.0.0.1:" + mockPort + "/orders/probe",
+                "GET",
+                2000,
+                null
+        ));
+
+        mcpToolListSynchronizer.synchronizeTools();
+        assertThat(mcpToolNames()).contains("mcp_sync_probe");
+
+        try {
+            // The kill switch withdraws the tool immediately via KillSwitchActivatedEvent (no scheduled wait)
+            toolRegistryService.disableTool("mcp_sync_probe", "Kill switch drill", "sec-ops");
+            assertThat(mcpToolNames()).doesNotContain("mcp_sync_probe");
+        } finally {
+            toolRegistryService.enableTool("mcp_sync_probe");
+        }
+
+        mcpToolListSynchronizer.synchronizeTools();
+        assertThat(mcpToolNames()).contains("mcp_sync_probe");
+    }
+
+    private List<String> mcpToolNames() {
+        return mcpSyncServer.listTools().stream().map(McpSchema.Tool::name).toList();
     }
 
     private String issueAgentAccessToken(String clientId, String clientSecret) {

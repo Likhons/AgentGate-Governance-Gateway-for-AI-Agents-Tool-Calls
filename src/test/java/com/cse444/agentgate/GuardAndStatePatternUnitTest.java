@@ -76,7 +76,8 @@ class GuardAndStatePatternUnitTest {
                 new AgentGateProperties.ApprovalProperties(Duration.ofMinutes(15), Duration.ofSeconds(3), ""),
                 new AgentGateProperties.GuardProperties(32, "[TRUNCATED_NOTICE]"),
                 new AgentGateProperties.LimitProperties(60, 5000, 20),
-                new AgentGateProperties.AuditProperties("audit-secret")
+                new AgentGateProperties.AuditProperties("audit-secret"),
+                new AgentGateProperties.McpProperties(Duration.ofSeconds(5))
         );
         PayloadTruncationOutputGuard guard = new PayloadTruncationOutputGuard(props);
         String oversized = "A".repeat(100);
