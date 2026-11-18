@@ -57,6 +57,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
@@ -104,6 +106,7 @@ class AgentGateQualityAttributesIntegrationTest {
     private static final AtomicBoolean flakyShouldFail = new AtomicBoolean(false);
     private static final ConcurrentLinkedQueue<String> approverWebhookBodies = new ConcurrentLinkedQueue<>();
     private static final ConcurrentLinkedQueue<String> mockMcpMethodsSeen = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<String> limitAlertBodies = new ConcurrentLinkedQueue<>();
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @LocalServerPort
@@ -142,6 +145,12 @@ class AgentGateQualityAttributesIntegrationTest {
     @Autowired
     private McpToolListSynchronizer mcpToolListSynchronizer;
 
+    /** FR6: limit-breach alerts go to the mock operations webhook. */
+    @DynamicPropertySource
+    static void limitAlertWebhook(DynamicPropertyRegistry registry) {
+        registry.add("agentgate.limits.alert-webhook-url", () -> "http://127.0.0.1:" + mockPort + "/limit-alert-webhook");
+    }
+
     private static boolean initialized = false;
 
     @BeforeAll
@@ -167,6 +176,10 @@ class AgentGateQualityAttributesIntegrationTest {
         });
         mockDownstreamServer.createContext("/approval-webhook", exchange -> {
             approverWebhookBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            sendJson(exchange, 200, "{\"received\":true}");
+        });
+        mockDownstreamServer.createContext("/limit-alert-webhook", exchange -> {
+            limitAlertBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             sendJson(exchange, 200, "{\"received\":true}");
         });
         mockDownstreamServer.createContext("/oversized", exchange ->
@@ -1114,6 +1127,62 @@ class AgentGateQualityAttributesIntegrationTest {
         awaitTrue(Duration.ofSeconds(30), () -> !auditTrailService.searchAuditLogs(
                 "support-bot", "cust-qa4-outage", "lookup_order", "EXECUTED", null, PageRequest.of(0, 5)).isEmpty());
         assertThat(auditTrailService.verifyChainIntegrity().intact()).isTrue();
+    }
+
+    @Test
+    @DisplayName("FR6 Alerts: a limit breach raises one alert per cooldown, posts it to the ops webhook and lists it for administrators")
+    void fr6LimitBreachRaisesAlertOnceAndListsIt() {
+        guardPipelineService.upsertLimitConfig(new UpsertLimitConfigRequest("rate-limited-bot", "lookup_order", 1, 500, 20));
+        // The first call passes the limits (and is then denied by default-deny policy); the next two breach 1/minute
+        for (int i = 0; i < 3; i++) {
+            try {
+                gatewayService.processToolCall("rate-limited-bot", new GatewayToolCallRequest(
+                        "lookup_order", Map.of("customerId", "cust-rl"), "cust-rl"));
+            } catch (RuntimeException expectedBlock) {
+                // denied by policy, then blocked by the rate limit
+            }
+        }
+
+        String alert = awaitBody(limitAlertBodies, "\"agentClientId\":\"rate-limited-bot\"",
+                "\"toolName\":\"lookup_order\"", "\"breachType\":\"PER_MINUTE_RATE_LIMIT\"");
+        assertThat(alert).contains("\"event\":\"limit.breach\"").contains("\"configuredLimit\":1");
+
+        String basicAdmin = "Basic " + java.util.Base64.getEncoder()
+                .encodeToString("user:test-admin-pass".getBytes(StandardCharsets.UTF_8));
+        awaitTrue(Duration.ofSeconds(10), () -> rateLimitedLookupAlerts(basicAdmin).size() == 1);
+        sleepQuietly(500);
+        // Two breaches inside the cooldown window raised exactly one alert
+        assertThat(rateLimitedLookupAlerts(basicAdmin)).hasSize(1);
+        assertThat(limitAlertBodies.stream().filter(body -> body.contains("\"agentClientId\":\"rate-limited-bot\"")
+                && body.contains("\"toolName\":\"lookup_order\"")).count()).isEqualTo(1);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> rateLimitedLookupAlerts(String authorizationHeader) {
+        Map<String, Object> page = RestClient.create("http://localhost:" + serverPort).get()
+                .uri("/api/v1/limits/alerts?size=100")
+                .header("Authorization", authorizationHeader)
+                .retrieve()
+                .body(Map.class);
+        assertThat(page).isNotNull();
+        return ((List<Map<String, Object>>) page.get("content")).stream()
+                .filter(alert -> "rate-limited-bot".equals(alert.get("agentClientId"))
+                        && "lookup_order".equals(alert.get("toolName"))
+                        && "PER_MINUTE_RATE_LIMIT".equals(alert.get("breachType")))
+                .toList();
+    }
+
+    private static String awaitBody(ConcurrentLinkedQueue<String> bodies, String... markers) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (System.nanoTime() - deadline < 0) {
+            for (String body : bodies) {
+                if (java.util.Arrays.stream(markers).allMatch(body::contains)) {
+                    return body;
+                }
+            }
+            sleepQuietly(50);
+        }
+        throw new AssertionError("No webhook body containing " + java.util.Arrays.toString(markers));
     }
 
     @SuppressWarnings("unchecked")

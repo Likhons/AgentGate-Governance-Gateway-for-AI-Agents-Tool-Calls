@@ -69,10 +69,17 @@ public record AgentGateProperties(
             @NotBlank String truncationNotice
     ) {}
 
+    /**
+     * @param alertCooldown   at most one limit-breach alert per agent, tool and breach type in this window (FR6)
+     * @param alertWebhookUrl operations webhook that receives limit-breach alerts; blank disables it (FR6)
+     */
     public record LimitProperties(
             @Min(1) int defaultRequestsPerMinute,
             @Min(1) int defaultDailyQuota,
-            @Min(1) int defaultWriteBlastRadiusPerHour
+            @Min(1) int defaultWriteBlastRadiusPerHour,
+            @NotNull Duration alertCooldown,
+            @Pattern(regexp = "^(https?://\\S+)?$", message = "must be blank or an http(s) URL")
+            String alertWebhookUrl
     ) {}
 
     public record AuditProperties(

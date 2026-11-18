@@ -68,6 +68,8 @@ services:
       AGENTGATE_AUDITOR_PASSWORD: ${AGENTGATE_AUDITOR_PASSWORD:?Set AGENTGATE_AUDITOR_PASSWORD in .env}
       # Optional fallback approver webhook for high-risk tools without their own approvalWebhookUrl (FR4)
       AGENTGATE_APPROVAL_WEBHOOK_URL: ${AGENTGATE_APPROVAL_WEBHOOK_URL:-}
+      # Optional operations webhook that receives limit-breach alerts (FR6)
+      AGENTGATE_LIMIT_ALERT_WEBHOOK_URL: ${AGENTGATE_LIMIT_ALERT_WEBHOOK_URL:-}
     ports:
       - "8080:8080"
     healthcheck:

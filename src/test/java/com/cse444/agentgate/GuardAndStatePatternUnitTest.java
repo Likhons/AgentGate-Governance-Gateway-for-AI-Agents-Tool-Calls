@@ -76,7 +76,7 @@ class GuardAndStatePatternUnitTest {
                         Duration.ofSeconds(2), Duration.ofMillis(1500)),
                 new AgentGateProperties.ApprovalProperties(Duration.ofMinutes(15), Duration.ofSeconds(3), ""),
                 new AgentGateProperties.GuardProperties(32, "[TRUNCATED_NOTICE]"),
-                new AgentGateProperties.LimitProperties(60, 5000, 20),
+                new AgentGateProperties.LimitProperties(60, 5000, 20, Duration.ofMinutes(1), ""),
                 new AgentGateProperties.AuditProperties("audit-secret"),
                 new AgentGateProperties.McpProperties(Duration.ofSeconds(5))
         );

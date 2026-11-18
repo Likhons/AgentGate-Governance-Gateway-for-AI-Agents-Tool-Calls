@@ -20,3 +20,5 @@ agentgate:
     hmac-secret: test-only-audit-chain-hmac-key-not-a-secret
   approval:
     default-webhook-url: ""
+  limits:
+    alert-webhook-url: ""

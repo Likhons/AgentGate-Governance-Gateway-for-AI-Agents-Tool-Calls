@@ -107,6 +107,9 @@ agentgate:
     default-requests-per-minute: 60
     default-daily-quota: 5000
     default-write-blast-radius-per-hour: 20
+    # FR6: at most one alert per agent, tool and breach type per cooldown; optional operations webhook
+    alert-cooldown: 1m
+    alert-webhook-url: ${AGENTGATE_LIMIT_ALERT_WEBHOOK_URL:}
   audit:
     hmac-secret: ${AGENTGATE_AUDIT_HMAC_SECRET}
   mcp:

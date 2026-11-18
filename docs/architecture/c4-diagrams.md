@@ -64,7 +64,7 @@ flowchart TB
         Identity["identity (FR2, FR8)\nAgentIdentityController\nAgentIdentityService\nOAuth2 Client Credentials & Agent Kill Switch"]
         Registry["registry (FR1, FR8, FR10)\nToolRegistryService, OpenApiToolImporterService\nResilientDownstreamInvoker\nRestDownstreamToolAdapter\nMcpDownstreamToolAdapter (MCP SDK client)"]
         Policy["policy (FR3, FR9, QA4)\nPolicyEngineService (10s Hot-Reload + 5m Fail-Safe)\nPolicyConditionEvaluator\nAgentGateAuthorizationManager"]
-        Guard["guard (FR5, FR6, QA1)\nGuardPipelineService\nJsonSchemaValidationGuard (@Order 10)\nArgumentSmugglingSecurityGuard (@Order 20)\nRateLimitAndBlastRadiusGuard (@Order 30)\nPiiRedactionOutputGuard (@Order 10)\nPayloadTruncationOutputGuard (@Order 20)"]
+        Guard["guard (FR5, FR6, QA1)\nGuardPipelineService\nJsonSchemaValidationGuard (@Order 10)\nArgumentSmugglingSecurityGuard (@Order 20)\nRateLimitAndBlastRadiusGuard (@Order 30)\nPiiRedactionOutputGuard (@Order 10)\nPayloadTruncationOutputGuard (@Order 20)\nLimitBreachAlertService (FR6 alerts)"]
         Approval["approval (FR4, FR8)\nApprovalWorkflowService\nApprovalLifecycleState (State Pattern)\nApprovalWebhookNotifier"]
         Shared["shared (OPEN Kernel)\nToolCallAuditRecordedEvent\nKillSwitchActivatedEvent\nLimitBreachAlertEvent\nAgentGateProperties"]
         Audit["audit (FR7, QA3)\nAuditTrailService (@TransactionalEventListener)\nAuditHashChainCalculator (HMAC-SHA256)\nAuditTrailController"]

@@ -1,5 +1,7 @@
 package com.cse444.agentgate.guard.web;
 
+import com.cse444.agentgate.guard.dto.LimitBreachAlertResponse;
+import com.cse444.agentgate.guard.service.LimitBreachAlertService;
 import com.cse444.agentgate.guard.domain.AgentToolLimitConfig;
 import com.cse444.agentgate.guard.dto.UpsertLimitConfigRequest;
 import com.cse444.agentgate.guard.service.GuardPipelineService;
@@ -22,9 +24,11 @@ import org.springframework.web.bind.annotation.*;
 public class LimitConfigController {
 
     private final GuardPipelineService guardPipelineService;
+    private final LimitBreachAlertService limitBreachAlertService;
 
-    public LimitConfigController(GuardPipelineService guardPipelineService) {
+    public LimitConfigController(GuardPipelineService guardPipelineService, LimitBreachAlertService limitBreachAlertService) {
         this.guardPipelineService = guardPipelineService;
+        this.limitBreachAlertService = limitBreachAlertService;
     }
 
     @PutMapping
@@ -37,5 +41,11 @@ public class LimitConfigController {
     @Operation(summary = "Paginated list of configured rate limits and blast-radius caps (C3, FR6)")
     public Page<AgentToolLimitConfig> listLimits(@PageableDefault(size = 20) Pageable pageable) {
         return guardPipelineService.listLimitConfigs(pageable);
+    }
+
+    @GetMapping("/alerts")
+    @Operation(summary = "Paginated list of raised limit-breach alerts, newest first (C3, FR6)")
+    public Page<LimitBreachAlertResponse> listAlerts(@PageableDefault(size = 20) Pageable pageable) {
+        return limitBreachAlertService.listAlerts(pageable);
     }
 }
