@@ -39,6 +39,15 @@ public class GlobalProblemDetailsHandler {
         return problem;
     }
 
+    @ExceptionHandler(DelegatedUserMismatchException.class)
+    public ProblemDetail handleDelegatedUserMismatch(DelegatedUserMismatchException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, ex.getMessage());
+        problem.setTitle("Delegated User Mismatch");
+        problem.setType(URI.create("https://agentgate.cse444.com/problems/delegated-user-mismatch"));
+        problem.setProperty("timestamp", Instant.now());
+        return problem;
+    }
+
     @ExceptionHandler(GuardRejectedException.class)
     public ProblemDetail handleGuardRejected(GuardRejectedException ex) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_CONTENT, ex.getMessage());

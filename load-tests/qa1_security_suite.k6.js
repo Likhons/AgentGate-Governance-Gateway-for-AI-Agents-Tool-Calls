@@ -91,11 +91,30 @@ export function setup() {
         agentClientId: clientId, toolName: 'issue_refund', requestsPerMinute: 1000, dailyQuota: 10000, writeBlastRadiusPerHour: 1000,
     }), { headers: adminHeaders });
 
-    const tokenRes = http.post(`${BASE_URL}/oauth2/token`, {
-        grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret, delegated_user: 'cust-100',
-    }, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    // FR2: the end user is bound to the agent token, so the hosting application requests one token per
+    // customer session. The red-team calls all use cust-100's token; each legitimate call uses its own
+    // customer's token (cust-1 ... cust-100).
+    const customers = [];
+    for (let i = 1; i <= 100; i++) {
+        customers.push(`cust-${i}`);
+    }
+    const tokenResponses = http.batch(customers.map((customer) => ['POST', `${BASE_URL}/oauth2/token`, {
+        grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret, delegated_user: customer,
+    }, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }]));
+    const tokens = {};
+    customers.forEach((customer, index) => {
+        tokens[customer] = tokenResponses[index].json('access_token');
+    });
 
-    return { token: tokenRes.json('access_token') };
+    return { token: tokens['cust-100'], tokens };
+}
+
+function customerHeaders(data, customer) {
+    return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${data.tokens[customer]}`,
+        'X-On-Behalf-Of-User': customer,
+    };
 }
 
 export default function (data) {
@@ -152,13 +171,13 @@ export default function (data) {
     for (let i = 1; i <= 100; i++) {
         const res = http.post(`${BASE_URL}/api/v1/gateway/call`, JSON.stringify({
             toolName: 'lookup_order', delegatedUserId: `cust-${i}`, arguments: { customerId: `cust-${i}` },
-        }), { headers });
+        }), { headers: customerHeaders(data, `cust-${i}`) });
         legitimatePassRate.add(res.status === 200 && res.json('outcome') === 'EXECUTED');
     }
     for (let i = 1; i <= 100; i++) {
         const res = http.post(`${BASE_URL}/api/v1/gateway/call`, JSON.stringify({
             toolName: 'issue_refund', delegatedUserId: `cust-${i}`, arguments: { orderId: `ORD-${i}`, amount: 500 + (i % 1000) },
-        }), { headers });
+        }), { headers: customerHeaders(data, `cust-${i}`) });
         legitimatePassRate.add(res.status === 200 && res.json('outcome') === 'EXECUTED');
     }
 

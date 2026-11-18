@@ -55,6 +55,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -73,6 +74,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -1130,6 +1132,37 @@ class AgentGateQualityAttributesIntegrationTest {
     }
 
     @Test
+    @DisplayName("FR2/QA1 Delegated User Binding: the end user comes from the agent token; naming another user is rejected and audited")
+    void fr2DelegatedUserIsBoundToTheAgentToken() {
+        String token = issueAgentAccessToken("support-bot", "support-secret-2026", "cust-bound-1");
+
+        ResponseEntity<String> ownUser = gatewayHttpCall(token, "cust-bound-1", "cust-bound-1", "cust-bound-1");
+        assertThat(ownUser.getStatusCode().value()).isEqualTo(200);
+        assertThat(ownUser.getBody()).contains("\"outcome\":\"EXECUTED\"");
+
+        // No user in the request: the token's user applies
+        ResponseEntity<String> implicitUser = gatewayHttpCall(token, null, null, "cust-bound-1");
+        assertThat(implicitUser.getStatusCode().value()).isEqualTo(200);
+
+        // A prompt-injected agent names the victim in the body or in the header: rejected
+        ResponseEntity<String> bodySpoof = gatewayHttpCall(token, "cust-victim-7", null, "cust-victim-7");
+        ResponseEntity<String> headerSpoof = gatewayHttpCall(token, null, "cust-victim-7", "cust-victim-7");
+        assertThat(bodySpoof.getStatusCode().value()).isEqualTo(403);
+        assertThat(bodySpoof.getBody()).contains("Delegated User Mismatch");
+        assertThat(headerSpoof.getStatusCode().value()).isEqualTo(403);
+
+        // A token issued without a user cannot name one either
+        String userlessToken = issueAgentAccessToken("support-bot", "support-secret-2026");
+        assertThat(gatewayHttpCall(userlessToken, "cust-victim-7", null, "cust-victim-7").getStatusCode().value())
+                .isEqualTo(403);
+
+        // Each rejected attempt is in the audit trail under the token's user (FR7)
+        Page<AuditLogResponse> rejected = auditTrailService.searchAuditLogs(
+                "support-bot", "cust-bound-1", "lookup_order", "REJECTED_DELEGATED_USER_MISMATCH", null, PageRequest.of(0, 10));
+        assertThat(rejected.getTotalElements()).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("FR6 Alerts: a limit breach raises one alert per cooldown, posts it to the ops webhook and lists it for administrators")
     void fr6LimitBreachRaisesAlertOnceAndListsIt() {
         guardPipelineService.upsertLimitConfig(new UpsertLimitConfigRequest("rate-limited-bot", "lookup_order", 1, 500, 20));
@@ -1170,6 +1203,26 @@ class AgentGateQualityAttributesIntegrationTest {
                         && "lookup_order".equals(alert.get("toolName"))
                         && "PER_MINUTE_RATE_LIMIT".equals(alert.get("breachType")))
                 .toList();
+    }
+
+    private ResponseEntity<String> gatewayHttpCall(String token, String bodyUser, String headerUser, String customerId) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("toolName", "lookup_order");
+        body.put("arguments", Map.of("customerId", customerId));
+        if (bodyUser != null) {
+            body.put("delegatedUserId", bodyUser);
+        }
+        RestClient.RequestBodySpec request = RestClient.create("http://localhost:" + serverPort).post()
+                .uri("/api/v1/gateway/call")
+                .header("Authorization", "Bearer " + token)
+                .contentType(MediaType.APPLICATION_JSON);
+        if (headerUser != null) {
+            request = request.header("X-On-Behalf-Of-User", headerUser);
+        }
+        return request.body(body)
+                .retrieve()
+                .onStatus(status -> true, (req, res) -> { })
+                .toEntity(String.class);
     }
 
     private static String awaitBody(ConcurrentLinkedQueue<String> bodies, String... markers) {
@@ -1214,10 +1267,17 @@ class AgentGateQualityAttributesIntegrationTest {
     }
 
     private String issueAgentAccessToken(String clientId, String clientSecret) {
+        return issueAgentAccessToken(clientId, clientSecret, null);
+    }
+
+    private String issueAgentAccessToken(String clientId, String clientSecret, String delegatedUser) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("grant_type", "client_credentials");
         form.add("client_id", clientId);
         form.add("client_secret", clientSecret);
+        if (delegatedUser != null) {
+            form.add("delegated_user", delegatedUser);
+        }
         @SuppressWarnings("unchecked")
         Map<String, Object> tokenBody = RestClient.create("http://localhost:" + serverPort).post()
                 .uri("/oauth2/token")

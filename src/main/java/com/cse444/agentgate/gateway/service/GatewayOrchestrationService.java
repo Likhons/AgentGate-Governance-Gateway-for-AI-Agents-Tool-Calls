@@ -15,6 +15,7 @@ import com.cse444.agentgate.registry.domain.RegisteredTool;
 import com.cse444.agentgate.registry.service.ToolRegistryService;
 import com.cse444.agentgate.shared.domain.AgentCallIdentity;
 import com.cse444.agentgate.shared.domain.RiskLevel;
+import com.cse444.agentgate.shared.error.DelegatedUserMismatchException;
 import com.cse444.agentgate.shared.error.GuardRejectedException;
 import com.cse444.agentgate.shared.error.LimitExceededException;
 import com.cse444.agentgate.shared.event.ToolCallAuditRecordedEvent;
@@ -30,6 +31,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -249,6 +251,58 @@ public class GatewayOrchestrationService {
             MDC.remove("agentClientId");
             MDC.remove("toolName");
         }
+    }
+
+    /**
+     * FR2, QA1: Entry point for calls that arrive with an agent's OAuth2 token. The end user the agent acts
+     * for is bound to the token ({@code delegated_user}, set when the hosting application requested it), so
+     * a prompt-injected agent cannot switch customers per call. A delegated user named in the request (body
+     * or {@code X-On-Behalf-Of-User} header) must match the token; otherwise the call is rejected with 403
+     * and the attempt is audited. Calls then run with the token's user.
+     */
+    public GatewayToolCallResponse processAgentCall(
+            String authenticatedClientId,
+            String tokenDelegatedUser,
+            List<String> requestedDelegatedUsers,
+            GatewayToolCallRequest request
+    ) {
+        String boundUser = (tokenDelegatedUser == null || tokenDelegatedUser.isBlank()) ? null : tokenDelegatedUser.trim();
+        for (String requested : requestedDelegatedUsers) {
+            if (requested != null && !requested.isBlank() && !requested.trim().equals(boundUser)) {
+                rejectDelegatedUserMismatch(authenticatedClientId, boundUser, requested.trim(), request);
+            }
+        }
+        return processToolCall(authenticatedClientId,
+                new GatewayToolCallRequest(request.toolName(), request.arguments(), boundUser));
+    }
+
+    private void rejectDelegatedUserMismatch(
+            String authenticatedClientId,
+            String boundUser,
+            String requestedUser,
+            GatewayToolCallRequest request
+    ) {
+        UUID callId = UUID.randomUUID();
+        String outcome = "REJECTED_DELEGATED_USER_MISMATCH";
+        log.warn("Rejected call by agent '{}' to tool '{}': request names delegated user '{}' but the token is bound to '{}' (FR2)",
+                authenticatedClientId, request.toolName(), requestedUser, boundUser);
+        meterRegistry.counter("agentgate.gateway.calls", "tool", request.toolName(), "outcome", outcome).increment();
+        eventPublisher.publishEvent(new ToolCallAuditRecordedEvent(
+                callId,
+                resolveTraceId(callId),
+                authenticatedClientId,
+                boundUser,
+                request.toolName(),
+                guardPipelineService.redactArgumentsForAudit(request.arguments() != null ? request.arguments() : Map.of()),
+                "DELEGATED_USER_BINDING",
+                0,
+                null,
+                null,
+                outcome,
+                0L,
+                Instant.now()
+        ));
+        throw new DelegatedUserMismatchException(boundUser, requestedUser);
     }
 
     /**

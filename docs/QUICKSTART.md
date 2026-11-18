@@ -87,6 +87,9 @@ curl -X POST http://localhost:8080/api/v1/gateway/call \
     "arguments": { "orderId": "ORD-900", "amount": 1500 }
   }'
 
+#    The end user is bound to the token (delegated_user): naming a different user in the body or the
+#    X-On-Behalf-Of-User header is rejected with 403, so request one token per user session (FR2)
+
 # 3. HIGH-risk calls return outcome HELD_FOR_APPROVAL with a statusUrl: the agent polls it with
 #    its own token until "terminal": true (EXECUTED, EXECUTION_FAILED, REJECTED, TIMED_OUT or
 #    CANCELLED_BY_KILL_SWITCH) (FR4)
@@ -178,3 +181,6 @@ The QA4 drill pauses the `agentgate-postgres` container for a few seconds and un
 18. **Case 18 — Limit Breaches Raised No Alert (`FR6`):**
     - *Issue Found:* FR6 says a breach "blocks further calls and raises an alert", but `RateLimitAndBlastRadiusGuard` only logged a warning, counted a metric and published `LimitBreachAlertEvent`, and nothing listened to that event, so nobody was alerted.
     - *Fix Applied:* `LimitBreachAlertService` (`@EventListener`) raises at most one alert per agent, tool and breach type per `agentgate.limits.alert-cooldown` (1 m), records it (`V9__limit_breach_alerts.sql`, `GET /api/v1/limits/alerts`, paginated) and posts it to `AGENTGATE_LIMIT_ALERT_WEBHOOK_URL`, off the request thread. Covered by `fr6LimitBreachRaisesAlertOnceAndListsIt` (two breaches in the cooldown, one alert and one webhook).
+19. **Case 19 — The Agent Could Choose the End User Per Call (`FR2`, `QA1`):**
+    - *Issue Found:* `GatewayController` took the delegated user from the request body, then the `X-On-Behalf-Of-User` header, then the token, so a prompt-injected agent could name the victim customer and satisfy a `MATCHES_DELEGATED_USER` policy.
+    - *Fix Applied:* The end user is the token's `delegated_user`; `GatewayOrchestrationService#processAgentCall` rejects a different user in the body or header with `403 Delegated User Mismatch` and audits it as `REJECTED_DELEGATED_USER_MISMATCH`. The k6 QA1 suite now requests one token per customer, and the QA4 drill one token for its outage user. Covered by `fr2DelegatedUserIsBoundToTheAgentToken`.

@@ -54,9 +54,10 @@ policy_store_status() {
   admin_get /actuator/health | grep -o '"policyStore":{.*' | grep -o '"status":"[A-Z_]*"' | head -1 | cut -d'"' -f4 || true
 }
 
+# An agent token for one end user (FR2: the delegated user is bound to the token)
 agent_token() {
   curl -s --max-time 10 -X POST "$BASE_URL/oauth2/token" \
-    -d "grant_type=client_credentials&client_id=$AGENT_ID&client_secret=$AGENT_SECRET&delegated_user=cust-100" \
+    -d "grant_type=client_credentials&client_id=$AGENT_ID&client_secret=$AGENT_SECRET&delegated_user=$1" \
     | sed -E 's/.*"access_token":"([^"]+)".*/\1/'
 }
 
@@ -98,9 +99,11 @@ qa3() {
 
 qa4() {
   echo "== qa4: PostgreSQL outage drill (docker pause $DB_CONTAINER)"
-  local token outage_user low_ms low medium high deadline
-  token="$(agent_token)"
+  local token outage_user outage_token low_ms low medium high deadline
   outage_user="cust-qa4-$(date +%s)"
+  # Issuing a token reads the agent from the database, so get both tokens before the pause
+  token="$(agent_token cust-100)"
+  outage_token="$(agent_token "$outage_user")"
 
   # Warm the caches with the same agent and tools while the database is up
   gateway_call "$token" '{"toolName":"lookup_order","delegatedUserId":"cust-100","arguments":{"customerId":"cust-100"}}' > /dev/null
@@ -113,7 +116,7 @@ qa4() {
   until [ "$(policy_store_status)" = "DOWN" ] || [ "$SECONDS" -ge "$deadline" ]; do sleep 1; done
   echo "policyStore health during the outage: $(policy_store_status)"
 
-  read -r low_ms low <<< "$(gateway_call "$token" "{\"toolName\":\"lookup_order\",\"delegatedUserId\":\"$outage_user\",\"arguments\":{\"customerId\":\"$outage_user\"}}")"
+  read -r low_ms low <<< "$(gateway_call "$outage_token" "{\"toolName\":\"lookup_order\",\"delegatedUserId\":\"$outage_user\",\"arguments\":{\"customerId\":\"$outage_user\"}}")"
   read -r _ medium <<< "$(gateway_call "$token" '{"toolName":"issue_refund","delegatedUserId":"cust-100","arguments":{"orderId":"ORD-QA4-OUTAGE","amount":100}}')"
   read -r _ high <<< "$(gateway_call "$token" '{"toolName":"bulk_payout","delegatedUserId":"cust-100","arguments":{"recipient":"vendor-qa4-outage","amount":100}}')"
 

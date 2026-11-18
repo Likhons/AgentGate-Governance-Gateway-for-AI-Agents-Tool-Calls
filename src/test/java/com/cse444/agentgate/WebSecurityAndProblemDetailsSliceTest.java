@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
@@ -110,7 +111,7 @@ class WebSecurityAndProblemDetailsSliceTest {
     void agentJwtAuthorizedForGatewayButForbiddenFromAdminApis() throws Exception {
         String agentJwt = issueTestJwt("support-bot", "cust-100");
         when(agentIdentityService.isAgentEnabled("support-bot")).thenReturn(true);
-        when(gatewayOrchestrationService.processToolCall(eq("support-bot"), any(GatewayToolCallRequest.class)))
+        when(gatewayOrchestrationService.processAgentCall(eq("support-bot"), eq("cust-100"), anyList(), any(GatewayToolCallRequest.class)))
                 .thenReturn(new GatewayToolCallResponse(
                         UUID.randomUUID(), "trace-123", "lookup_order", "EXECUTED",
                         "allow-own-customer-order-read", 1, null, null, "{\"ok\":true}", 2L, Instant.now()
@@ -158,7 +159,7 @@ class WebSecurityAndProblemDetailsSliceTest {
                 .andExpect(jsonPath("$.title").value("Bean Validation Failed"));
 
         // 2. Guard rejection -> 422 ProblemDetail
-        when(gatewayOrchestrationService.processToolCall(eq("support-bot"), any(GatewayToolCallRequest.class)))
+        when(gatewayOrchestrationService.processAgentCall(eq("support-bot"), eq("cust-100"), anyList(), any(GatewayToolCallRequest.class)))
                 .thenThrow(new GuardRejectedException("ArgumentSmugglingSecurityGuard", "Blocked injection"));
         mockMvc.perform(post("/api/v1/gateway/call")
                         .header("Authorization", "Bearer " + agentJwt)
@@ -168,7 +169,7 @@ class WebSecurityAndProblemDetailsSliceTest {
                 .andExpect(jsonPath("$.guard").value("ArgumentSmugglingSecurityGuard"));
 
         // 3. Rate limit breach -> 429 ProblemDetail
-        when(gatewayOrchestrationService.processToolCall(eq("support-bot"), any(GatewayToolCallRequest.class)))
+        when(gatewayOrchestrationService.processAgentCall(eq("support-bot"), eq("cust-100"), anyList(), any(GatewayToolCallRequest.class)))
                 .thenThrow(new LimitExceededException(BreachType.WRITE_BLAST_RADIUS_CAP, 20, "Blast cap exceeded"));
         mockMvc.perform(post("/api/v1/gateway/call")
                         .header("Authorization", "Bearer " + agentJwt)

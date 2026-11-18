@@ -11,6 +11,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Arrays;
 import java.util.UUID;
 
 /**
@@ -28,23 +29,20 @@ public class GatewayController {
     }
 
     @PostMapping("/call")
-    @Operation(summary = "Execute a governed tool call through AgentGate (FR1-FR10)")
+    @Operation(summary = "Execute a governed tool call through AgentGate (FR1-FR10)",
+            description = "The end user is the token's delegated_user; a different user in the body or the "
+                    + "X-On-Behalf-Of-User header is rejected with 403 (FR2).")
     public GatewayToolCallResponse callTool(
             @Valid @RequestBody GatewayToolCallRequest request,
             @RequestHeader(value = "X-On-Behalf-Of-User", required = false) String headerDelegatedUser,
             Authentication authentication
     ) {
-        String clientId = extractClientId(authentication);
-        String delegatedUser = request.delegatedUserId() != null && !request.delegatedUserId().isBlank()
-                ? request.delegatedUserId()
-                : extractDelegatedUser(authentication, headerDelegatedUser);
-
-        GatewayToolCallRequest enriched = new GatewayToolCallRequest(
-                request.toolName(),
-                request.arguments(),
-                delegatedUser
+        return orchestrationService.processAgentCall(
+                extractClientId(authentication),
+                tokenDelegatedUser(authentication),
+                Arrays.asList(request.delegatedUserId(), headerDelegatedUser),
+                request
         );
-        return orchestrationService.processToolCall(clientId, enriched);
     }
 
     @GetMapping("/approvals/{approvalId}")
@@ -64,10 +62,7 @@ public class GatewayController {
         return authentication != null ? authentication.getName() : "anonymous-agent";
     }
 
-    private String extractDelegatedUser(Authentication authentication, String headerDelegatedUser) {
-        if (headerDelegatedUser != null && !headerDelegatedUser.isBlank()) {
-            return headerDelegatedUser;
-        }
+    private String tokenDelegatedUser(Authentication authentication) {
         if (authentication instanceof JwtAuthenticationToken jwtAuth) {
             return jwtAuth.getToken().getClaimAsString("delegated_user");
         }
