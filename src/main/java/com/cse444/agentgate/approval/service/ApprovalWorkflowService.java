@@ -28,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -103,6 +104,8 @@ public class ApprovalWorkflowService {
 
     /**
      * Approves a pending request (with optional edited arguments) and executes the downstream tool (FR4).
+     * A downstream failure is recorded on the request (executionStatus = FAILED) instead of rolling the
+     * decision back, so the agent and approver always see a definite final result.
      */
     @Transactional
     public ApprovalRequestResponse approveRequest(
@@ -121,13 +124,28 @@ public class ApprovalWorkflowService {
         }
 
         RegisteredTool tool = toolRegistryService.getRequiredToolByName(request.getToolName());
-        Map<String, Object> effectiveArgs = parseArguments(request.getEffectiveArgumentsJson());
-        DownstreamExecutionResult execResult = toolRegistryService.executeDownstreamTool(tool, effectiveArgs);
-        String sanitizedPayload = PiiSanitizer.redactByClearance(execResult.payload(), ClearanceLevel.NONE);
-        request.recordExecutionResult(sanitizedPayload);
+
+        // Flush the decision before the side effect: the @Version optimistic lock makes a concurrent
+        // second decision on the same request fail here, so a payout or refund can never run twice.
+        approvalRepository.saveAndFlush(request);
+
+        String auditOutcome;
+        long downstreamLatencyMs = 0L;
+        try {
+            Map<String, Object> effectiveArgs = parseArguments(request.getEffectiveArgumentsJson());
+            DownstreamExecutionResult execResult = toolRegistryService.executeDownstreamTool(tool, effectiveArgs);
+            request.recordExecutionSucceeded(PiiSanitizer.redactByClearance(execResult.payload(), ClearanceLevel.NONE));
+            downstreamLatencyMs = execResult.latencyMs();
+            auditOutcome = "APPROVED_EXECUTED";
+        } catch (RuntimeException ex) {
+            log.warn("Approved request {} for tool '{}' failed downstream: {}",
+                    request.getId(), request.getToolName(), ex.getMessage());
+            request.recordExecutionFailed(executionFailurePayload(ex));
+            auditOutcome = "APPROVED_EXECUTION_FAILED";
+        }
 
         ApprovalRequest saved = approvalRepository.save(request);
-        publishApprovalAuditEvent(saved, "APPROVED_EXECUTED", execResult.latencyMs());
+        publishApprovalAuditEvent(saved, auditOutcome, downstreamLatencyMs);
         return ApprovalRequestResponse.from(saved);
     }
 
@@ -147,6 +165,18 @@ public class ApprovalWorkflowService {
     @Transactional(readOnly = true)
     public ApprovalRequestResponse getApprovalStatus(UUID approvalId) {
         return ApprovalRequestResponse.from(getRequiredApproval(approvalId));
+    }
+
+    /**
+     * FR4: Lets the calling agent read the current or final result of its own paused call.
+     * Requests that belong to another agent are reported as not found, so their existence is not leaked.
+     */
+    @Transactional(readOnly = true)
+    public ApprovalRequestResponse getApprovalForRequestingAgent(UUID approvalId, String agentClientId) {
+        return approvalRepository.findById(approvalId)
+                .filter(found -> found.getAgentClientId().equals(agentClientId))
+                .map(ApprovalRequestResponse::from)
+                .orElseThrow(() -> new EntityNotFoundException("Approval request not found: " + approvalId));
     }
 
     @Transactional(readOnly = true)
@@ -223,6 +253,14 @@ public class ApprovalWorkflowService {
                 latencyMs,
                 Instant.now()
         ));
+    }
+
+    private String executionFailurePayload(RuntimeException ex) {
+        String reason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
+        Map<String, Object> failure = new LinkedHashMap<>();
+        failure.put("error", "DOWNSTREAM_EXECUTION_FAILED");
+        failure.put("message", PiiSanitizer.redactByClearance(reason, ClearanceLevel.NONE));
+        return serializeArguments(failure);
     }
 
     private void checkNotExpired(ApprovalRequest request) {

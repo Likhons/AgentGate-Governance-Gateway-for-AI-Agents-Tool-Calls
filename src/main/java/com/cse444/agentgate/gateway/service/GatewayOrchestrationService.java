@@ -2,6 +2,7 @@ package com.cse444.agentgate.gateway.service;
 
 import com.cse444.agentgate.approval.dto.ApprovalRequestResponse;
 import com.cse444.agentgate.approval.service.ApprovalWorkflowService;
+import com.cse444.agentgate.gateway.dto.AgentApprovalResultResponse;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallRequest;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallResponse;
 import com.cse444.agentgate.guard.dto.GuardInspectionContext;
@@ -48,6 +49,9 @@ import java.util.concurrent.TimeUnit;
 public class GatewayOrchestrationService {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayOrchestrationService.class);
+
+    /** Agent-facing endpoint (GatewayController) that reports the final result of a held call (FR4). */
+    public static final String APPROVAL_STATUS_PATH = "/api/v1/gateway/approvals/";
 
     private final AgentIdentityService agentIdentityService;
     private final ToolRegistryService toolRegistryService;
@@ -162,7 +166,7 @@ public class GatewayOrchestrationService {
                         policyRuleVersion,
                         approvalId,
                         approvalState,
-                        "{\"status\":\"PENDING_APPROVAL\",\"approvalId\":\"" + approvalId + "\"}",
+                        pendingApprovalPayload(approvalId, pendingApproval.expiresAt()),
                         gatewayOverheadMs,
                         Instant.now()
                 );
@@ -246,6 +250,24 @@ public class GatewayOrchestrationService {
             MDC.remove("agentClientId");
             MDC.remove("toolName");
         }
+    }
+
+    /**
+     * FR4: Returns the current or final result of a paused high-risk call to the agent that made it,
+     * so the agent receives a clear outcome (executed, failed, rejected, timed out or cancelled).
+     */
+    public AgentApprovalResultResponse getApprovalResultForAgent(String authenticatedClientId, UUID approvalId) {
+        return AgentApprovalResultResponse.from(
+                approvalWorkflowService.getApprovalForRequestingAgent(approvalId, authenticatedClientId));
+    }
+
+    /**
+     * Tells the agent where to poll for the final result of a call that is held for approval (FR4).
+     */
+    private static String pendingApprovalPayload(UUID approvalId, Instant expiresAt) {
+        return "{\"status\":\"PENDING_APPROVAL\",\"approvalId\":\"" + approvalId
+                + "\",\"statusUrl\":\"" + APPROVAL_STATUS_PATH + approvalId
+                + "\",\"expiresAt\":\"" + expiresAt + "\"}";
     }
 
     private String resolveTraceId(UUID fallbackCallId) {

@@ -1,6 +1,7 @@
 package com.cse444.agentgate.approval.domain;
 
 import com.cse444.agentgate.approval.state.ApprovalLifecycleState;
+import com.cse444.agentgate.shared.domain.ApprovalExecutionStatus;
 import com.cse444.agentgate.shared.domain.ApprovalStateType;
 import jakarta.persistence.*;
 
@@ -55,6 +56,10 @@ public class ApprovalRequest {
 
     @Column(name = "execution_result_payload", columnDefinition = "TEXT")
     private String executionResultPayload;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "execution_status", length = 16)
+    private ApprovalExecutionStatus executionStatus;
 
     @Column(name = "webhook_url", length = 512)
     private String webhookUrl;
@@ -138,8 +143,14 @@ public class ApprovalRequest {
         this.decidedAt = Instant.now();
     }
 
-    public void recordExecutionResult(String payload) {
-        this.executionResultPayload = payload;
+    public void recordExecutionSucceeded(String redactedPayload) {
+        this.executionResultPayload = redactedPayload;
+        this.executionStatus = ApprovalExecutionStatus.SUCCEEDED;
+    }
+
+    public void recordExecutionFailed(String failurePayload) {
+        this.executionResultPayload = failurePayload;
+        this.executionStatus = ApprovalExecutionStatus.FAILED;
     }
 
     public UUID getId() { return id; }
@@ -155,6 +166,7 @@ public class ApprovalRequest {
     public String getApproverId() { return approverId; }
     public String getDecisionNote() { return decisionNote; }
     public String getExecutionResultPayload() { return executionResultPayload; }
+    public ApprovalExecutionStatus getExecutionStatus() { return executionStatus; }
     public String getWebhookUrl() { return webhookUrl; }
     public Instant getExpiresAt() { return expiresAt; }
     public Instant getCreatedAt() { return createdAt; }

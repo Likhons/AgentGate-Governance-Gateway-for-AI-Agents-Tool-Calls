@@ -6,6 +6,7 @@ import com.cse444.agentgate.approval.service.ApprovalWorkflowService;
 import com.cse444.agentgate.audit.dto.AuditChainVerificationReport;
 import com.cse444.agentgate.audit.dto.AuditLogResponse;
 import com.cse444.agentgate.audit.service.AuditTrailService;
+import com.cse444.agentgate.gateway.dto.AgentApprovalResultResponse;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallRequest;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallResponse;
 import com.cse444.agentgate.gateway.service.GatewayOrchestrationService;
@@ -25,6 +26,7 @@ import com.cse444.agentgate.registry.dto.RegisterToolRequest;
 import com.cse444.agentgate.registry.dto.ToolResponse;
 import com.cse444.agentgate.registry.service.OpenApiToolImporterService;
 import com.cse444.agentgate.registry.service.ToolRegistryService;
+import com.cse444.agentgate.shared.domain.ApprovalExecutionStatus;
 import com.cse444.agentgate.shared.domain.ApprovalStateType;
 import com.cse444.agentgate.shared.domain.ClearanceLevel;
 import com.cse444.agentgate.shared.domain.PolicyEffect;
@@ -32,6 +34,7 @@ import com.cse444.agentgate.shared.domain.RiskLevel;
 import com.cse444.agentgate.shared.domain.ToolType;
 import com.cse444.agentgate.shared.error.LimitExceededException;
 import com.sun.net.httpserver.HttpServer;
+import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -810,6 +813,123 @@ class AgentGateQualityAttributesIntegrationTest {
             assertThat(readStillWorks.outcome()).isEqualTo("EXECUTED");
         } finally {
             toolRegistryService.setAllWriteToolsKillSwitch(false, "Cleared", "sec-ops");
+        }
+    }
+
+    @Test
+    @DisplayName("FR4 Agent Result: the agent polls the final result of its own held call; other agents cannot see it")
+    void fr4AgentPollsFinalApprovalResult() {
+        // 1. The held response tells the agent where to poll for the final result
+        GatewayToolCallResponse held = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                "bulk_payout",
+                Map.of("recipient", "vendor-P", "amount", 7000),
+                "cust-100",
+                null
+        ));
+        assertThat(held.outcome()).isEqualTo("HELD_FOR_APPROVAL");
+        assertThat(held.redactedResultPayload()).contains("/api/v1/gateway/approvals/" + held.approvalId());
+
+        // 2. The calling agent sees PENDING; a different agent cannot see the request at all
+        AgentApprovalResultResponse pending = gatewayService.getApprovalResultForAgent("support-bot", held.approvalId());
+        assertThat(pending.resultStatus()).isEqualTo("PENDING");
+        assertThat(pending.terminal()).isFalse();
+        assertThatThrownBy(() -> gatewayService.getApprovalResultForAgent("rate-limited-bot", held.approvalId()))
+                .isInstanceOf(EntityNotFoundException.class);
+
+        // 3. After approval the agent reads EXECUTED over HTTP with its own OAuth2 JWT
+        approvalWorkflowService.approveRequest(
+                held.approvalId(), new ApprovalDecisionRequest("Verified vendor", null), "senior-approver");
+        AgentApprovalResultResponse executed = RestClient.create("http://localhost:" + serverPort).get()
+                .uri("/api/v1/gateway/approvals/{approvalId}", held.approvalId())
+                .header("Authorization", "Bearer " + issueAgentAccessToken("support-bot", "support-secret-2026"))
+                .retrieve()
+                .body(AgentApprovalResultResponse.class);
+        assertThat(executed).isNotNull();
+        assertThat(executed.resultStatus()).isEqualTo("EXECUTED");
+        assertThat(executed.terminal()).isTrue();
+        assertThat(executed.resultPayload()).contains("[REDACTED_EMAIL]");
+
+        // 4. Rejected and timed-out calls also end in an explicit terminal status
+        GatewayToolCallResponse toReject = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                "bulk_payout", Map.of("recipient", "vendor-R", "amount", 8000), "cust-100", null));
+        approvalWorkflowService.rejectRequest(toReject.approvalId(), "Unknown vendor", "senior-approver");
+        assertThat(gatewayService.getApprovalResultForAgent("support-bot", toReject.approvalId()).resultStatus())
+                .isEqualTo("REJECTED");
+
+        RegisteredTool payoutTool = toolRegistryService.getRequiredToolByName("bulk_payout");
+        ApprovalRequestResponse expiring = approvalWorkflowService.createPendingApproval(
+                "support-bot", "cust-100", payoutTool, Map.of("recipient", "vendor-T", "amount", 100),
+                "allow-high-risk-payout-with-human-approval", 1, null, Duration.ofMillis(1));
+        sleepQuietly(20);
+        approvalWorkflowService.expireTimedOutApprovals();
+        AgentApprovalResultResponse timedOut = gatewayService.getApprovalResultForAgent("support-bot", expiring.id());
+        assertThat(timedOut.resultStatus()).isEqualTo("TIMED_OUT");
+        assertThat(timedOut.terminal()).isTrue();
+    }
+
+    @Test
+    @DisplayName("FR4 Clear Result: an approved call whose downstream fails is reported as EXECUTION_FAILED instead of staying pending")
+    void fr4ApprovedCallWithFailingDownstreamReportsExecutionFailed() {
+        toolRegistryService.registerOrUpdateTool(new RegisterToolRequest(
+                "high_risk_flaky_transfer",
+                "High-risk transfer whose downstream is unavailable",
+                "{\"type\":\"object\",\"properties\":{\"probe\":{\"type\":\"string\"}}}",
+                RiskLevel.HIGH,
+                "TreasuryTeam",
+                ToolType.REST,
+                true,
+                "http://127.0.0.1:" + mockPort + "/flaky",
+                "POST",
+                1500
+        ));
+        policyEngineService.createOrVersionPolicyRule(new CreatePolicyRuleRequest(
+                "allow-high-risk-flaky-transfer",
+                70,
+                "support-bot",
+                "high_risk_flaky_transfer",
+                PolicyEffect.ALLOW,
+                List.of(),
+                false,
+                "FR4 downstream failure after approval"
+        ), "security-admin");
+
+        GatewayToolCallResponse held = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                "high_risk_flaky_transfer", Map.of("probe", "transfer-1"), "cust-100", null));
+        assertThat(held.outcome()).isEqualTo("HELD_FOR_APPROVAL");
+
+        flakyShouldFail.set(true);
+        ApprovalRequestResponse approved = approvalWorkflowService.approveRequest(
+                held.approvalId(), new ApprovalDecisionRequest("Approved", null), "senior-approver");
+        assertThat(approved.state()).isEqualTo(ApprovalStateType.APPROVED);
+        assertThat(approved.executionStatus()).isEqualTo(ApprovalExecutionStatus.FAILED);
+
+        AgentApprovalResultResponse result = gatewayService.getApprovalResultForAgent("support-bot", held.approvalId());
+        assertThat(result.resultStatus()).isEqualTo("EXECUTION_FAILED");
+        assertThat(result.terminal()).isTrue();
+        assertThat(result.resultPayload()).contains("DOWNSTREAM_EXECUTION_FAILED");
+    }
+
+    private String issueAgentAccessToken(String clientId, String clientSecret) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("grant_type", "client_credentials");
+        form.add("client_id", clientId);
+        form.add("client_secret", clientSecret);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> tokenBody = RestClient.create("http://localhost:" + serverPort).post()
+                .uri("/oauth2/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(form)
+                .retrieve()
+                .body(Map.class);
+        assertThat(tokenBody).isNotNull();
+        return (String) tokenBody.get("access_token");
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
         }
     }
 }

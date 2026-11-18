@@ -2,6 +2,7 @@ package com.cse444.agentgate;
 
 import com.cse444.agentgate.approval.service.ApprovalWorkflowService;
 import com.cse444.agentgate.approval.web.ApprovalWebPageController;
+import com.cse444.agentgate.gateway.dto.AgentApprovalResultResponse;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallRequest;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallResponse;
 import com.cse444.agentgate.gateway.service.GatewayOrchestrationService;
@@ -16,6 +17,7 @@ import com.cse444.agentgate.policy.web.PolicyController;
 import com.cse444.agentgate.registry.service.ToolRegistryService;
 import com.cse444.agentgate.shared.config.AgentGateJacksonConfig;
 import com.cse444.agentgate.shared.config.AgentGateProperties;
+import com.cse444.agentgate.shared.domain.ApprovalStateType;
 import com.cse444.agentgate.shared.error.GlobalProblemDetailsHandler;
 import com.cse444.agentgate.shared.error.GuardRejectedException;
 import com.cse444.agentgate.shared.error.LimitExceededException;
@@ -178,6 +180,29 @@ class WebSecurityAndProblemDetailsSliceTest {
                         .with(httpBasic("user", "password")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("RELOADED"));
+    }
+
+    @Test
+    @DisplayName("FR4 Agent Result Endpoint: an enabled agent JWT can poll its approval result; anonymous callers get 401")
+    void agentJwtCanPollApprovalResultButAnonymousCannot() throws Exception {
+        UUID approvalId = UUID.randomUUID();
+        String agentJwt = issueTestJwt("support-bot", "cust-100");
+        when(agentIdentityService.isAgentEnabled("support-bot")).thenReturn(true);
+        when(gatewayOrchestrationService.getApprovalResultForAgent("support-bot", approvalId))
+                .thenReturn(new AgentApprovalResultResponse(
+                        approvalId, "bulk_payout", ApprovalStateType.REJECTED, "REJECTED", true,
+                        "Rejected by a human approver; the tool was not called.", "Unknown vendor",
+                        null, Instant.now(), Instant.now()
+                ));
+
+        mockMvc.perform(get("/api/v1/gateway/approvals/{approvalId}", approvalId)
+                        .header("Authorization", "Bearer " + agentJwt))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.resultStatus").value("REJECTED"))
+                .andExpect(jsonPath("$.terminal").value(true));
+
+        mockMvc.perform(get("/api/v1/gateway/approvals/{approvalId}", approvalId))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

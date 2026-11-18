@@ -1,6 +1,7 @@
 package com.cse444.agentgate.approval.dto;
 
 import com.cse444.agentgate.approval.domain.ApprovalRequest;
+import com.cse444.agentgate.shared.domain.ApprovalExecutionStatus;
 import com.cse444.agentgate.shared.domain.ApprovalStateType;
 
 import java.time.Instant;
@@ -23,6 +24,7 @@ public record ApprovalRequestResponse(
         String approverId,
         String decisionNote,
         String executionResultPayload,
+        ApprovalExecutionStatus executionStatus,
         Instant expiresAt,
         Instant createdAt,
         Instant decidedAt
@@ -42,6 +44,7 @@ public record ApprovalRequestResponse(
                 entity.getApproverId(),
                 entity.getDecisionNote(),
                 entity.getExecutionResultPayload(),
+                entity.getExecutionStatus(),
                 entity.getExpiresAt(),
                 entity.getCreatedAt(),
                 entity.getDecidedAt()

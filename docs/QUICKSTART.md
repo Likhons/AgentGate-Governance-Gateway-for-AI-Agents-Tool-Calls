@@ -73,7 +73,12 @@ curl -X POST http://localhost:8080/api/v1/gateway/call \
     "arguments": { "orderId": "ORD-900", "amount": 1500 }
   }'
 
-# 3. Verify Hash-Chained Audit Trail Integrity (FR7, QA3)
+# 3. HIGH-risk calls return outcome HELD_FOR_APPROVAL with a statusUrl: the agent polls it with
+#    its own token until "terminal": true (EXECUTED, EXECUTION_FAILED, REJECTED, TIMED_OUT or
+#    CANCELLED_BY_KILL_SWITCH) (FR4)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/gateway/approvals/<approvalId>
+
+# 4. Verify Hash-Chained Audit Trail Integrity (FR7, QA3)
 curl -u user:password http://localhost:8080/api/v1/audit/verify
 ```
 
@@ -82,6 +87,7 @@ curl -u user:password http://localhost:8080/api/v1/audit/verify
 ## Part 2: AI-Usage Log (Requirement C11)
 
 - **IDE & Model Used:** Antigravity IDE (Gemini 4 Argon High)
+- **Review & Fixes (2026-11-18):** Claude Code (Claude Opus 5.5) — requirement-by-requirement code review against the assignment brief, then the fixes logged from Case 11 onward.
 - **Key Prompts Used:**
   1. *Step 1 Prompt:* Project scaffolding with Spring Boot 4.0.0, Java 21 Virtual Threads, Spring AI MCP, Spring Modulith + ArchUnit boundary verification, and `< 8 GB RAM` Docker Compose budget.
   2. *Step 2 Prompt:* Core Domain & Tool Registry (`FR1`, `FR8`, `FR10`) with OpenAPI 3.x importer, Spring AI MCP unified front door, and Resilience4j per-tool circuit breakers and timeouts.
@@ -123,3 +129,6 @@ curl -u user:password http://localhost:8080/api/v1/audit/verify
 10. **Case 10 — QA2 100 RPS HikariCP Deadlock, Audit Sequence Collision & ZGC Memory Exhaustion (`QA2`, `FR7`, `C1`):**
     - *Issue Found:* Initial live k6 `100 RPS` run (`load-tests/qa2_gateway_latency.k6.js`) failed all thresholds (`agentgate_gateway_overhead_ms p(95)=59.88s`, `http_req_duration p(95)=59.88s`, `39.02%` pass rate, `5,814` dropped iterations, `1016 MiB / 1 GiB` app RAM). Container logs revealed `HikariPool-1` exhaustion (`total=20, active=20, idle=0, waiting=10`) from holding `@Transactional` across `GatewayOrchestrationService#processToolCall` during downstream I/O while `AFTER_COMPLETION` `REQUIRES_NEW` audit listeners waited for connections, `synchronized` inside `@Transactional` proxy causing `PSQLException: duplicate key value violates unique constraint "audit_log_entries_sequence_number_key"`, 5 redundant per-request SQL lookups, and `-XX:+UseZGC` retaining ~99% of container RAM.
     - *Fix Applied:* Removed outer `@Transactional` from `GatewayOrchestrationService#processToolCall`, added 10s Caffeine caches (invalidated on writes) in `AgentIdentityService`, `ToolRegistryService`, and `RateLimitAndBlastRadiusGuard` plus lock-free `AtomicBoolean` reads in `isAllWriteToolsKilled()`, refactored `AuditTrailService` to a lock-free `ConcurrentLinkedQueue` + dedicated single writer thread + `TransactionTemplate(PROPAGATION_REQUIRES_NEW)` batching up to `128` rows with `flushPendingAudits()` before queries/verification/shutdown, and switched `Dockerfile` JVM flags to `-XX:+UseG1GC -Xms128m -Xmx512m -XX:MaxGCPauseMillis=10`. Re-running QA2 achieved **`p(95) = 5 ms` gateway overhead**, **`p(95) = 17.29 ms` end-to-end HTTP**, **`100.00%` (`5,977/5,977`) pass rate**, **`0` errors**, `6,207` verified intact audit entries, and `450 MiB` idle / `627.3 MiB` post-load RAM.
+11. **Case 11 — Agent Never Received the Final Result of a Held High-Risk Call (`FR4`):**
+    - *Issue Found:* Code review against FR4 ("the agent receives a clear result in every case") showed that the only approval status endpoint, `GET /api/v1/approvals/{id}`, is restricted to `ADMIN`/`APPROVER`, so the agent that made a held call could never learn its outcome; and an approved call whose downstream failed threw inside `@Transactional`, rolling the decision back so the request stayed `PENDING` until it timed out.
+    - *Fix Applied:* Added the agent-scoped `GET /api/v1/gateway/approvals/{approvalId}` (`GatewayController` → `GatewayOrchestrationService#getApprovalResultForAgent` → `ApprovalWorkflowService#getApprovalForRequestingAgent`; other agents get `404`), a `statusUrl` in the `HELD_FOR_APPROVAL` payload, and `AgentApprovalResultResponse` with an explicit `resultStatus`/`terminal`. An `execution_status` column (`V7`) records a failed downstream call as `EXECUTION_FAILED` instead of rolling back, and `approveRequest` flushes the decision before calling downstream so the `@Version` lock stops a concurrent second approval from executing a payout twice. Covered by `fr4AgentPollsFinalApprovalResult`, `fr4ApprovedCallWithFailingDownstreamReportsExecutionFailed` and `agentJwtCanPollApprovalResultButAnonymousCannot`.

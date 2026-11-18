@@ -1,5 +1,6 @@
 package com.cse444.agentgate.gateway.web;
 
+import com.cse444.agentgate.gateway.dto.AgentApprovalResultResponse;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallRequest;
 import com.cse444.agentgate.gateway.dto.GatewayToolCallResponse;
 import com.cse444.agentgate.gateway.service.GatewayOrchestrationService;
@@ -9,6 +10,8 @@ import jakarta.validation.Valid;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.UUID;
 
 /**
  * Single Front-Door Gateway Controller for AI Agent Tool Calls (FR1-FR10).
@@ -43,6 +46,15 @@ public class GatewayController {
                 request.approvalWebhookUrl()
         );
         return orchestrationService.processToolCall(clientId, enriched);
+    }
+
+    @GetMapping("/approvals/{approvalId}")
+    @Operation(summary = "Poll the current or final result of your own paused high-risk tool call (FR4)")
+    public AgentApprovalResultResponse getApprovalResult(
+            @PathVariable UUID approvalId,
+            Authentication authentication
+    ) {
+        return orchestrationService.getApprovalResultForAgent(extractClientId(authentication), approvalId);
     }
 
     private String extractClientId(Authentication authentication) {
