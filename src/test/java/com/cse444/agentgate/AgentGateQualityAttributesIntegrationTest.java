@@ -57,6 +57,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -146,6 +148,9 @@ class AgentGateQualityAttributesIntegrationTest {
 
     @Autowired
     private McpToolListSynchronizer mcpToolListSynchronizer;
+
+    @Autowired
+    private JwtDecoder jwtDecoder;
 
     /** FR6: limit-breach alerts go to the mock operations webhook. */
     @DynamicPropertySource
@@ -1129,6 +1134,56 @@ class AgentGateQualityAttributesIntegrationTest {
         awaitTrue(Duration.ofSeconds(30), () -> !auditTrailService.searchAuditLogs(
                 "support-bot", "cust-qa4-outage", "lookup_order", "EXECUTED", null, PageRequest.of(0, 5)).isEmpty());
         assertThat(auditTrailService.verifyChainIntegrity().intact()).isTrue();
+    }
+
+    @Test
+    @DisplayName("FR2 Spring Authorization Server: agent tokens carry client_id, clearance and delegated user; introspection works; disabled agents get none")
+    void fr2SpringAuthorizationServerIssuesAgentTokens() {
+        RestClient client = RestClient.create("http://localhost:" + serverPort);
+        String metadata = client.get().uri("/.well-known/oauth-authorization-server").retrieve().body(String.class);
+        assertThat(metadata).contains("\"issuer\":\"https://agentgate.cse444.com\"").contains("/oauth2/token");
+        // The metadata advertises only the grant and client authentication agents can use, and no JWK Set
+        assertThat(metadata)
+                .contains("\"grant_types_supported\":[\"client_credentials\"]")
+                .contains("\"token_endpoint_auth_methods_supported\":[\"client_secret_basic\",\"client_secret_post\"]")
+                .doesNotContain("jwks_uri")
+                .doesNotContain("private_key_jwt");
+
+        String token = issueAgentAccessToken("support-bot", "support-secret-2026", "cust-sas-1");
+        Jwt jwt = jwtDecoder.decode(token);
+        assertThat(jwt.getClaimAsString("client_id")).isEqualTo("support-bot");
+        assertThat(jwt.getClaimAsString("clearance_level")).isEqualTo("NONE");
+        assertThat(jwt.getClaimAsString("delegated_user")).isEqualTo("cust-sas-1");
+        assertThat(jwt.getClaimAsString("iss")).isEqualTo("https://agentgate.cse444.com");
+
+        // RFC 7662 token introspection by the same client
+        MultiValueMap<String, String> introspect = new LinkedMultiValueMap<>();
+        introspect.add("token", token);
+        introspect.add("client_id", "support-bot");
+        introspect.add("client_secret", "support-secret-2026");
+        String introspection = client.post().uri("/oauth2/introspect")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(introspect)
+                .retrieve()
+                .body(String.class);
+        assertThat(introspection).contains("\"active\":true").contains("\"client_id\":\"support-bot\"");
+
+        // A disabled agent (FR8 kill switch) cannot obtain a token
+        agentIdentityService.registerAgent(new RegisterAgentRequest(
+                "disabled-bot", "disabled-secret-2026", "Disabled Bot", "SecOps", ClearanceLevel.NONE, "mcp:invoke"));
+        agentIdentityService.disableAgent("disabled-bot", "FR8 drill", "sec-ops");
+        MultiValueMap<String, String> refusedForm = new LinkedMultiValueMap<>();
+        refusedForm.add("grant_type", "client_credentials");
+        refusedForm.add("client_id", "disabled-bot");
+        refusedForm.add("client_secret", "disabled-secret-2026");
+        ResponseEntity<String> refused = client.post().uri("/oauth2/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(refusedForm)
+                .retrieve()
+                .onStatus(status -> true, (request, response) -> { })
+                .toEntity(String.class);
+        assertThat(refused.getStatusCode().value()).isEqualTo(401);
+        assertThat(refused.getBody()).contains("invalid_client");
     }
 
     @Test

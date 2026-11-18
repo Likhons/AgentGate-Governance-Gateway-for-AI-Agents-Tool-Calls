@@ -15,21 +15,17 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwsHeader;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
-import org.springframework.security.oauth2.jwt.JwtEncoder;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.Map;
 import java.util.UUID;
 
 /**
- * Manages OAuth2 Client Credentials authentication for AI Agents (FR2)
- * and instant Agent Kill Switches (FR8).
+ * Manages registered AI agents (FR2) and instant Agent Kill Switches (FR8).
+ * Agents obtain OAuth2 client_credentials tokens from Spring Authorization Server
+ * ({@code identity.security.AuthorizationServerConfig}); this service resolves the calling agent on every
+ * request from a last-known-good cache (QA4).
  */
 @Service
 public class AgentIdentityService {
@@ -38,7 +34,6 @@ public class AgentIdentityService {
 
     private final AgentClientRepository agentRepository;
     private final PasswordEncoder passwordEncoder;
-    private final JwtEncoder jwtEncoder;
     private final AgentGateProperties properties;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -52,13 +47,11 @@ public class AgentIdentityService {
     public AgentIdentityService(
             AgentClientRepository agentRepository,
             PasswordEncoder passwordEncoder,
-            JwtEncoder jwtEncoder,
             AgentGateProperties properties,
             ApplicationEventPublisher eventPublisher
     ) {
         this.agentRepository = agentRepository;
         this.passwordEncoder = passwordEncoder;
-        this.jwtEncoder = jwtEncoder;
         this.properties = properties;
         this.eventPublisher = eventPublisher;
         this.agentCache = FailSafeCaches.lastKnownGood(
@@ -89,54 +82,6 @@ public class AgentIdentityService {
         AgentClient saved = agentRepository.save(agent);
         agentCache.invalidate(saved.getClientId());
         return AgentClientResponse.from(saved);
-    }
-
-    /**
-     * Issues an OAuth2 access token using RFC 6749 section 4.4 Client Credentials Grant (FR2).
-     */
-    @Transactional(readOnly = true)
-    public Map<String, Object> issueClientCredentialsToken(
-            String clientId,
-            String clientSecret,
-            String requestedDelegatedUser
-    ) {
-        AgentClient agent = agentRepository.findByClientId(clientId)
-                .orElseThrow(() -> new IllegalArgumentException("Invalid OAuth2 client_id or client_secret"));
-
-        if (!agent.isEnabled()) {
-            throw new IllegalStateException("Agent '" + clientId + "' is disabled by Kill Switch (FR8)");
-        }
-
-        if (!passwordEncoder.matches(clientSecret, agent.getClientSecretHash())) {
-            throw new IllegalArgumentException("Invalid OAuth2 client_id or client_secret");
-        }
-
-        Instant now = Instant.now();
-        Instant expiresAt = now.plus(properties.security().accessTokenTtl());
-
-        JwtClaimsSet.Builder claimsBuilder = JwtClaimsSet.builder()
-                .issuer("https://agentgate.cse444.com")
-                .subject(agent.getClientId())
-                .issuedAt(now)
-                .expiresAt(expiresAt)
-                .claim("client_id", agent.getClientId())
-                .claim("clearance_level", agent.getClearanceLevel().name())
-                .claim("scope", agent.getScopes());
-
-        if (requestedDelegatedUser != null && !requestedDelegatedUser.isBlank()) {
-            claimsBuilder.claim("delegated_user", requestedDelegatedUser);
-        }
-
-        JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
-        String tokenValue = jwtEncoder.encode(JwtEncoderParameters.from(header, claimsBuilder.build())).getTokenValue();
-
-        return Map.of(
-                "access_token", tokenValue,
-                "token_type", "Bearer",
-                "expires_in", properties.security().accessTokenTtl().toSeconds(),
-                "scope", agent.getScopes(),
-                "clearance_level", agent.getClearanceLevel().name()
-        );
     }
 
     /**

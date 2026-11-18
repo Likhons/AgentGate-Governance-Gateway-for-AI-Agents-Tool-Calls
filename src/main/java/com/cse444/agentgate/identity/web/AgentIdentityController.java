@@ -10,39 +10,24 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
-import java.util.Map;
 
 /**
- * REST Controller for OAuth2 Client Credentials token issuance (FR2),
- * Agent Client registration (FR2), and Agent Kill Switch (FR8).
+ * REST Controller for AI Agent registration (FR2) and the Agent Kill Switch (FR8).
+ * Agents obtain OAuth2 client_credentials tokens from Spring Authorization Server at {@code /oauth2/token}
+ * (identity.security.AuthorizationServerConfig).
  */
 @RestController
-@Tag(name = "Agent Identity & OAuth2 (FR2, FR8)", description = "OAuth2 Client Credentials token issuance, agent registration, and agent kill switch")
+@Tag(name = "Agent Identity & OAuth2 (FR2, FR8)", description = "Agent registration as OAuth2 clients and the agent kill switch (tokens: POST /oauth2/token)")
 public class AgentIdentityController {
 
     private final AgentIdentityService agentIdentityService;
 
     public AgentIdentityController(AgentIdentityService agentIdentityService) {
         this.agentIdentityService = agentIdentityService;
-    }
-
-    @PostMapping(value = "/oauth2/token", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
-    @Operation(summary = "Issue OAuth2 access token via client_credentials grant (FR2)")
-    public Map<String, Object> issueTokenForm(
-            @RequestParam("grant_type") String grantType,
-            @RequestParam("client_id") String clientId,
-            @RequestParam("client_secret") String clientSecret,
-            @RequestParam(value = "delegated_user", required = false) String delegatedUser
-    ) {
-        if (!"client_credentials".equals(grantType)) {
-            throw new IllegalArgumentException("Unsupported grant_type: only client_credentials is permitted (FR2)");
-        }
-        return agentIdentityService.issueClientCredentialsToken(clientId, clientSecret, delegatedUser);
     }
 
     @PostMapping("/api/v1/agents")

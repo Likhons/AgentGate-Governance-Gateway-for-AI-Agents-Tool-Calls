@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -41,7 +42,12 @@ import java.time.Instant;
 @EnableMethodSecurity
 public class SecurityConfig {
 
+    /**
+     * Resource-server chain for every request not handled by the Spring Authorization Server chain
+     * (identity.security.AuthorizationServerConfig, order 1), which issues the tokens validated here.
+     */
     @Bean
+    @Order(2)
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             AgentGateAuthorizationManager agentGateAuthorizationManager,
@@ -57,7 +63,6 @@ public class SecurityConfig {
                                 "/css/**",
                                 "/js/**",
                                 "/favicon.svg",
-                                "/oauth2/token",
                                 "/actuator/health",
                                 "/actuator/health/**",
                                 "/actuator/info",

@@ -12,6 +12,10 @@ spring:
     import: "optional:file:.env[.properties]"
   profiles:
     default: dev
+  autoconfigure:
+    # Agent tokens are HS256-signed by the gateway's own JwtEncoder (FR2), so Spring Authorization
+    # Server needs no generated RSA key pair and no published JWK Set
+    exclude: org.springframework.boot.security.oauth2.server.authorization.autoconfigure.servlet.OAuth2AuthorizationServerJwtAutoConfiguration
   threads:
     virtual:
       enabled: true

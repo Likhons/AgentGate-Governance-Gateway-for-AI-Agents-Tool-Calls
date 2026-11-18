@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart TD
-    Agent(["AI Agent (OAuth2 Client)"]) -->|"1. POST /oauth2/token\n(client_credentials)"| AuthCtrl["identity.web.AgentIdentityController"]
+    Agent(["AI Agent (OAuth2 Client)"]) -->|"1. POST /oauth2/token\n(client_credentials)"| AuthCtrl["identity.security.AuthorizationServerConfig\n(Spring Authorization Server)"]
     AuthCtrl -->|"HMAC-SHA256 JWT\n(client_id, clearance, delegated_user)"| Agent
 
     Agent -->|"2. POST /api/v1/gateway/call\nBearer JWT + X-On-Behalf-Of-User"| SecFilter["policy.security.AgentGateAuthorizationManager"]

@@ -8,30 +8,30 @@
 
 | Requirement / Attribute | Verification Method | Target SLA | Measured Result | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **C5 & C6: Automated Unit, Slice, ArchUnit & Integration Suite** | `./gradlew --no-daemon test` (Testcontainers PostgreSQL 16 + Redis 7.4) + CI job `live-quality-attributes` running `load-tests/run-live-qa.sh` | 100% tests passing, 0 cyclic Modulith deps, every QA measure scripted in CI | **33 / 33 tests passed** on 2026-11-19 (`0` failed, `0` skipped; `AgentGateQualityAttributesIntegrationTest` `15/15` in `13.417s`, `ArchitectureRulesTest` `6/6` in `9.429s`); live QA1–QA4 script **4 / 4 checks passed** ([§8](#8-real-outage-qa4-live-quality-script-and-ci-2026-11-19)) | PASS |
-| **QA1: Security & Injection Defense** | Live Docker `grafana/k6` (`load-tests/qa1_security_suite.k6.js`, via `run-live-qa.sh`) + JUnit IT | `100%` malicious blocked; `>= 95%` legitimate pass | **`100.00%` (30 / 30)** malicious blocked/held; **`100.00%` (200 / 200)** legitimate passed (2026-11-19, [§8](#8-real-outage-qa4-live-quality-script-and-ci-2026-11-19)) | PASS |
-| **QA2: Gateway Latency @ 100 RPS** | Live Docker `grafana/k6` (`load-tests/qa2_gateway_latency.k6.js`, `60s`, via `run-live-qa.sh`) | Overhead `p(95) < 30ms`; End-to-End `p(95) < 40ms`; `>= 95%` pass | Gateway overhead **`p(95) = 2 ms`** (`avg = 1.05 ms`); HTTP `p(95) = 9.68 ms` (`avg = 6.06 ms`); **`100.00%` (6,001 / 6,001)** pass on 2026-11-19 with the fail-safe caches ([§8](#8-real-outage-qa4-live-quality-script-and-ci-2026-11-19)); earlier runs and two failed runs in §3 and §7 | PASS |
-| **QA3: Hash-Chained Audit Trail & Tamper Detection** | Live `GET /api/v1/audit/verify` + Testcontainers `qa3AuditTrailDetectsTampering` | Tamper detected `< 1 min`; zero broken chain links | **`30,486 / 30,486`** live entries verified **`intact: true`** (2026-11-19, after four outage drills); SQL row edit pinpoints `firstTamperedEntryId` | PASS |
-| **QA4: Fail-Safe Under Policy Outage** | Testcontainers `qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed` (PostgreSQL container paused) + live `docker pause` drill in `run-live-qa.sh` + flag-based `qa4FailSafeAvailabilityUnderPolicyStoreOutage` | `MEDIUM`/`HIGH` fail closed; `LOW` works `<= 5m` on the last known state | With PostgreSQL **paused**: `LOW` call **`200 EXECUTED` in 8 ms**, `MEDIUM`/`HIGH` **`409` fail closed**, `policyStore` health `DOWN` → `UP`, outage-time call hash-chained after recovery ([§8](#8-real-outage-qa4-live-quality-script-and-ci-2026-11-19)) | PASS |
+| **C5 & C6: Automated Unit, Slice, ArchUnit & Integration Suite** | `./gradlew --no-daemon test` (Testcontainers PostgreSQL 16 + Redis 7.4) + CI job `live-quality-attributes` running `load-tests/run-live-qa.sh` | 100% tests passing, 0 cyclic Modulith deps, every QA measure scripted in CI | **36 / 36 tests passed** on 2026-11-19 (`0` failed, `0` skipped; `AgentGateQualityAttributesIntegrationTest` `18/18` in `14.623s`, `ArchitectureRulesTest` `6/6` in `12.503s`); live QA1–QA4 script **4 / 4 checks passed** ([§9](#9-spring-authorization-server-token-bound-end-users-and-fr6-alerts-2026-11-19)) | PASS |
+| **QA1: Security & Injection Defense** | Live Docker `grafana/k6` (`load-tests/qa1_security_suite.k6.js`, via `run-live-qa.sh`) + JUnit IT | `100%` malicious blocked; `>= 95%` legitimate pass | **`100.00%` (30 / 30)** malicious blocked/held; **`100.00%` (200 / 200)** legitimate passed, each call with its own customer's token; naming another end user is rejected with `403` (2026-11-19, [§9](#9-spring-authorization-server-token-bound-end-users-and-fr6-alerts-2026-11-19)) | PASS |
+| **QA2: Gateway Latency @ 100 RPS** | Live Docker `grafana/k6` (`load-tests/qa2_gateway_latency.k6.js`, `60s`, via `run-live-qa.sh`) | Overhead `p(95) < 30ms`; End-to-End `p(95) < 40ms`; `>= 95%` pass | Gateway overhead **`p(95) = 2 ms`** (`avg = 1.13 ms`); HTTP `p(95) = 10.62 ms` (`avg = 5.96 ms`); **`100.00%` (6,001 / 6,001)** pass on 2026-11-19 with Spring Authorization Server tokens ([§9](#9-spring-authorization-server-token-bound-end-users-and-fr6-alerts-2026-11-19)); earlier runs and two failed runs in §3 and §7 | PASS |
+| **QA3: Hash-Chained Audit Trail & Tamper Detection** | Live `GET /api/v1/audit/verify` + Testcontainers `qa3AuditTrailDetectsTampering` | Tamper detected `< 1 min`; zero broken chain links | **`36,735 / 36,735`** live entries verified **`intact: true`** (2026-11-19, after five outage drills); SQL row edit pinpoints `firstTamperedEntryId` | PASS |
+| **QA4: Fail-Safe Under Policy Outage** | Testcontainers `qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed` (PostgreSQL container paused) + live `docker pause` drill in `run-live-qa.sh` + flag-based `qa4FailSafeAvailabilityUnderPolicyStoreOutage` | `MEDIUM`/`HIGH` fail closed; `LOW` works `<= 5m` on the last known state | With PostgreSQL **paused**: `LOW` call **`200 EXECUTED` in 8–13 ms**, `MEDIUM`/`HIGH` **`409` fail closed**, `policyStore` health `DOWN` → `UP`, outage-time call hash-chained after recovery ([§8](#8-real-outage-qa4-live-quality-script-and-ci-2026-11-19), [§9](#9-spring-authorization-server-token-bound-end-users-and-fr6-alerts-2026-11-19)) | PASS |
 | **QA5: Zero-Code OpenAPI Onboarding** | Live `POST /api/v1/tools/import-openapi` + `GET /api/v1/tools` | Onboard new REST API with `0` code changes | `qa5_get_order` imported from OpenAPI `3.0.1` JSON, visible in registry (`circuitBreakerState: CLOSED`) | PASS |
-| **C1: Resource Budget (`< 8 GB RAM`)** | `docker stats --no-stream` across all 4 running containers | Total `< 8,192 MiB` | **`528.2 MiB` idle**, **`735.2 MiB` post-load** on 2026-11-18 (`< 9%` of 8 GB ceiling) | PASS |
+| **C1: Resource Budget (`< 8 GB RAM`)** | `docker stats --no-stream` across all 4 running containers | Total `< 8,192 MiB` | **`528.2 MiB` idle**, **`735.2 MiB` post-load** on 2026-11-18 (`< 9%` of 8 GB ceiling); `656.5 MiB` after the 2026-11-19 live run | PASS |
 
 ---
 
-## 2. Automated Gradle Test Suite Results (Latest Run: 2026-11-19, after AI-Usage Log Cases 15–17)
+## 2. Automated Gradle Test Suite Results (Latest Run: 2026-11-19, after AI-Usage Log Cases 18–20)
 
 Executed with JDK 21 (`--no-daemon test`) against Testcontainers **PostgreSQL 16** and **Redis 7.4**:
 
 | Test Suite | Tests | Failures | Errors | Skipped | Duration |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `com.cse444.agentgate.ArchitectureRulesTest` | 6 | 0 | 0 | 0 | 9.429 s |
-| `com.cse444.agentgate.AgentGateQualityAttributesIntegrationTest` | 15 | 0 | 0 | 0 | 13.417 s |
-| `com.cse444.agentgate.WebSecurityAndProblemDetailsSliceTest` | 6 | 0 | 0 | 0 | 1.068 s |
+| `com.cse444.agentgate.ArchitectureRulesTest` | 6 | 0 | 0 | 0 | 12.503 s |
+| `com.cse444.agentgate.AgentGateQualityAttributesIntegrationTest` | 18 | 0 | 0 | 0 | 14.623 s |
+| `com.cse444.agentgate.WebSecurityAndProblemDetailsSliceTest` | 6 | 0 | 0 | 0 | 1.409 s |
 | `com.cse444.agentgate.GuardAndStatePatternUnitTest` | 4 | 0 | 0 | 0 | 0.011 s |
-| `com.cse444.agentgate.PolicyAndConditionUnitTest` | 2 | 0 | 0 | 0 | 0.005 s |
-| **Total** | **33** | **0** | **0** | **0** | **23.930 s** |
+| `com.cse444.agentgate.PolicyAndConditionUnitTest` | 2 | 0 | 0 | 0 | 0.004 s |
+| **Total** | **36** | **0** | **0** | **0** | **28.550 s** |
 
-*Earlier runs:* 31 / 31 on 2026-11-18 after Cases 11–14 (each of those four commits passed on its own: 29 → 30 → 31 → 31);
+*Earlier runs:* 33 / 33 after Cases 15–17 (2026-11-19); 31 / 31 on 2026-11-18 after Cases 11–14 (each of those four commits passed on its own: 29 → 30 → 31 → 31);
 25 / 25 after the QA2 optimization (integration suite 9 tests).
 
 Covered integration test scenarios in [AgentGateQualityAttributesIntegrationTest.java](../src/test/java/com/cse444/agentgate/AgentGateQualityAttributesIntegrationTest.java):
@@ -51,6 +51,9 @@ Covered integration test scenarios in [AgentGateQualityAttributesIntegrationTest
 - `qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed` *(Case 15: PostgreSQL container paused; LOW works, MEDIUM/HIGH fail closed, audits catch up)*
 - `fr1McpToolsListsOnlyToolsTheAgentIsPermittedToCall` *(Case 16: `/mcp/tools` shows each agent only its permitted tools)*
 - `fr1McpDownstreamFr10CircuitBreakerAndObservabilityEndpoints` now asserts the real MCP handshake (`initialize` → `notifications/initialized` → `tools/call`) *(Case 16)*
+- `fr6LimitBreachRaisesAlertOnceAndListsIt` *(Case 18: one alert per cooldown, ops webhook, `GET /api/v1/limits/alerts`)*
+- `fr2DelegatedUserIsBoundToTheAgentToken` *(Case 19: body/header user spoofing rejected with `403` and audited)*
+- `fr2SpringAuthorizationServerIssuesAgentTokens` *(Case 20: Spring Authorization Server metadata lists only `client_credentials`, token claims, introspection, disabled agent refused)*
 
 ---
 
@@ -680,3 +683,98 @@ curl's own request time.
 ```
 > QA1's setup now gives `lookup_order` the same daily budget as QA2 (Case 17), so the suites no longer depend on run
 > order (compare run C in §7).
+
+## 9. Spring Authorization Server, Token-Bound End Users and FR6 Alerts (2026-11-19)
+
+Fixes for AI-usage log Cases 18–20: limit-breach alerts (FR6), the end user bound to the agent token (FR2, QA1), and
+Spring Authorization Server instead of the hand-written token endpoint (FR2, ADR-005). The Docker image was rebuilt and
+started on the existing volume (`V9__limit_breach_alerts` applied by Flyway); the automated suite is 36/36 (§2). The
+checks below ran against that stack; the admin credentials were read from `.env` and are not shown.
+
+### 9.1 Spring Authorization Server Issues the Agent Tokens (FR2, Case 20)
+```text
+== 1. Authorization server metadata (RFC 8414)
+  issuer = https://agentgate.cse444.com
+  token_endpoint = https://agentgate.cse444.com/oauth2/token
+  grant_types_supported = ['client_credentials']
+  token_endpoint_auth_methods_supported = ['client_secret_basic', 'client_secret_post']
+  introspection_endpoint = https://agentgate.cse444.com/oauth2/introspect
+  revocation_endpoint = https://agentgate.cse444.com/oauth2/revoke
+  jwks_uri advertised: False
+== 2. Token from Spring Authorization Server (support-bot acting for cust-42)
+  header: {'typ': 'JWT', 'alg': 'HS256'}
+  claims: {'iss': 'https://agentgate.cse444.com', 'sub': 'support-bot', 'client_id': 'support-bot', 'clearance_level': 'NONE', 'delegated_user': 'cust-42', 'scope': 'mcp:invoke'} lifetime_s = 3600
+== 3. Token introspection (RFC 7662)
+  {'active': True, 'client_id': 'support-bot', 'token_type': 'Bearer', 'delegated_user': 'cust-42', 'clearance_level': 'NONE'}
+== 4. Wrong client secret
+  401
+```
+The metadata lists only what an agent can use. Spring Authorization Server's defaults also advertised the
+authorization-code, refresh-token and token-exchange grants, JWT and mTLS client authentication, PKCE, DPoP and a
+`jwks_uri` that answered `401`; the HS256 signing key is secret, so no JWK Set is published.
+
+### 9.2 The End User Is Bound to the Token (FR2, QA1, Case 19)
+```text
+== 5. Delegated user bound to the token (FR2, QA1)
+  own user (cust-42):          200 EXECUTED |
+  body names cust-7:           403 Delegated User Mismatch | The request names delegated user 'cust-7', but this agent token was issued for 'cust-42'; request a token for
+  header names cust-7:         403 Delegated User Mismatch | The request names delegated user 'cust-7', but this agent token was issued for 'cust-42'; request a token for
+```
+```text
+WARN  GatewayOrchestrationService  Rejected call by agent 'support-bot' to tool 'lookup_order': request names delegated user 'cust-7' but the token is bound to 'cust-42' (FR2)
+WARN  GatewayOrchestrationService  Rejected call by agent 'support-bot' to tool 'lookup_order': request names delegated user 'cust-7' but the token is bound to 'cust-42' (FR2)
+```
+Before this fix, the same body or header would have made the call run for `cust-7` and pass a
+`MATCHES_DELEGATED_USER` policy.
+
+### 9.3 FR6 Limit-Breach Alert Drill (Case 18)
+A demo agent with `lookup_order` limited to one call per minute, called three times:
+```text
+== 6. FR6 alert drill (fr6-demo-bot, lookup_order limited to 1 call/minute)
+  register fr6-demo-bot: 201
+  limit rpm=1: 200
+  call 1: 409 Operation Blocked by Governance State | Policy denied tool call: Denied by default-deny policy stance (no matching ALLOW rule found)
+  call 2: 429 Rate Limit, Daily Quota, or Write Blast-Radius Cap Exceeded | Agent 'fr6-demo-bot' breached PER_MINUTE_RATE_LIMIT (limit=1) on tool 'lookup_order' (FR6)
+  call 3: 429 Rate Limit, Daily Quota, or Write Blast-Radius Cap Exceeded | Agent 'fr6-demo-bot' breached PER_MINUTE_RATE_LIMIT (limit=1) on tool 'lookup_order' (FR6)
+  alerts for fr6-demo-bot: 1
+    {'agentClientId': 'fr6-demo-bot', 'toolName': 'lookup_order', 'breachType': 'PER_MINUTE_RATE_LIMIT', 'configuredLimit': 1, 'webhookNotified': False, 'raisedAt': '2026-11-18T19:21:17.483027Z'}
+WARN  LimitBreachAlertService  [LIMIT BREACH ALERT RAISED] agent='fr6-demo-bot' tool='lookup_order' type=PER_MINUTE_RATE_LIMIT limit=1   (thread virtual-172)
+```
+The first call is within the limit (and denied by the default-deny policy, since the demo agent has no policy); the two
+breaches inside the one-minute cooldown raised exactly one alert, listed at `GET /api/v1/limits/alerts`.
+`webhookNotified: false` because `AGENTGATE_LIMIT_ALERT_WEBHOOK_URL` is blank in this `.env`; webhook delivery is
+covered by `fr6LimitBreachRaisesAlertOnceAndListsIt`.
+
+### 9.4 Live Quality-Attribute Script (`bash load-tests/run-live-qa.sh`, exit code `0`)
+```text
+== qa2: k6 load-tests/qa2_gateway_latency.k6.js
+PASS  qa2: k6 thresholds met
+    ✓ 'p(95)<30' p(95)=2ms
+    ✓ 'p(95)<40' p(95)=10.62ms
+    ✓ 'rate>=0.95' rate=100.00%
+== qa1: k6 load-tests/qa1_security_suite.k6.js
+PASS  qa1: k6 thresholds met
+    ✓ 'rate>=0.95' rate=100.00%
+    ✓ 'rate==1.0' rate=100.00%
+== qa4: PostgreSQL outage drill (docker pause agentgate-postgres)
+policyStore health during the outage: DOWN
+PASS  qa4: LOW-risk call during the outage -> 200 EXECUTED in 13 ms
+PASS  qa4: MEDIUM-risk call during the outage -> 409 fail closed
+PASS  qa4: HIGH-risk call during the outage -> 409 fail closed
+PASS  qa4: the outage-time call was hash-chained after recovery (policyStore UP)
+== qa3: audit hash chain verification
+PASS  qa3: "totalRecordsVerified":36735 intact
+== 0 failed check(s); results in build/live-qa/
+```
+- **QA2:** `6,001` calls at `99.1` calls/s; gateway overhead `avg = 1.13 ms`, `p(95) = 2 ms`, `max = 35 ms`; HTTP
+  `avg = 5.96 ms`, `p(95) = 10.62 ms`; `12,002 / 12,002` checks. `http_req_failed` `1 / 6,006` is the setup call
+  re-registering the existing `support-bot`, as in §7.
+- **QA1:** `setup()` now gets one token per customer from Spring Authorization Server (`cust-1` … `cust-100`, one
+  `http.batch`); `200 / 200` legitimate calls passed with their own customer's token and `30 / 30` red-team calls were
+  blocked or held. `http_req_failed` `29 / 339` counts the expected `4xx` rejections, as in §4; the 100 token requests
+  all succeeded.
+- **QA4:** both agent tokens are requested before `docker pause`, because issuing a token reads the agent from the
+  database; the LOW call then ran on cached state.
+- **Run conditions:** the host had only about `0.8 GB` of its `7.7 GB` RAM available during the run; container memory
+  afterwards was `656.5 MiB` in total (`agentgate-app` `547.1 MiB`, `agentgate-postgres` `83.0 MiB`,
+  `agentgate-redis` `15.8 MiB`, `agentgate-mock-downstream` `10.6 MiB`).

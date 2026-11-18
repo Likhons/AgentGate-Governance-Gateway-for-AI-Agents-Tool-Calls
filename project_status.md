@@ -1,6 +1,6 @@
 # AgentGate — Project Status & Session Memory
 
-## 1. Tasks Completed (Steps 1–8)
+## 1. Tasks Completed (Steps 1–11)
 - **Step 1 — Scaffolding & Architecture Boundaries:**
   - Configured Gradle 9.2.0 Wrapper ([gradlew](file:///e:/Assignment/gradlew), [build.gradle](file:///e:/Assignment/build.gradle), [settings.gradle](file:///e:/Assignment/settings.gradle)) for Spring Boot 4.0.0, Java 21 (Virtual Threads), Spring AI 2.0.0 MCP, Spring Security 7 OAuth2, Spring Modulith 2.0.0, ArchUnit 1.4.0, Resilience4j 2.4.0 (`resilience4j-spring-boot4`), Bucket4j + Redis + Caffeine, Flyway + PostgreSQL, JSON Schema Validator 3.0.0, JAXB API 2.3.1, and Testcontainers 2.x.
   - Configured [Dockerfile](file:///e:/Assignment/Dockerfile), [docker-compose.yml](file:///e:/Assignment/docker-compose.yml), [.env.example](file:///e:/Assignment/.env.example), [application.yml](file:///e:/Assignment/src/main/resources/application.yml), [logback-spring.xml](file:///e:/Assignment/src/main/resources/logback-spring.xml), and [AgentGateProperties.java](file:///e:/Assignment/src/main/java/com/cse444/agentgate/shared/config/AgentGateProperties.java).
@@ -38,13 +38,18 @@
   - FR1: `McpDownstreamToolAdapter` uses the MCP Java SDK client (`initialize` handshake, Streamable HTTP or SSE); `GET /mcp/tools` (now in the gateway module) lists only the tools each agent's policies allow.
   - C5: `load-tests/run-live-qa.sh` (QA2, QA1, QA4 drill, QA3) runs locally and in the new `live-quality-attributes` CI job; QA1 no longer depends on run order.
   - Full suite 33/33; live script 4/4 checks passed (QA2 `p(95) = 2 ms` overhead, QA1 30/30 + 200/200, QA3 30,486 intact).
+- **Step 11 — FR6 Alerts, Token-Bound End User and Spring Authorization Server (2026-11-19, AI-Usage Log Cases 18–20):**
+  - FR6: `LimitBreachAlertService` raises one alert per agent, tool and breach type per 1-minute cooldown, stores it (`V9`), lists it at `GET /api/v1/limits/alerts` and posts it to the optional `AGENTGATE_LIMIT_ALERT_WEBHOOK_URL`.
+  - FR2/QA1: the end user is the token's `delegated_user`; naming another user in the body or `X-On-Behalf-Of-User` is rejected with `403 Delegated User Mismatch` and audited. The k6 QA1 suite gets one token per customer.
+  - FR2: Spring Authorization Server (`identity.security`) issues the HS256 agent tokens, with introspection, revocation and metadata that lists only `client_credentials`; the hand-written `/oauth2/token` is gone (ADR-005).
+  - Full suite 36/36; live script 4/4 (QA2 `p(95) = 2 ms` overhead, QA1 30/30 + 200/200, QA4 LOW call in 13 ms, QA3 36,735 intact); token, user-binding and FR6 alert drills in `EVIDENCE_REPORT.md` §9.
 
 ## 2. Current State of the Application
-- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **33/33 passing** (`0` failures, `0` skipped) as of 2026-11-19.
-- Live checks (`bash load-tests/run-live-qa.sh`, also run in CI) pass **QA1 (`100%`)**, **QA2 (`p(95) = 2 ms` overhead @ 100 RPS)**, **QA3 (`30,486/30,486` intact)**, **QA4 (real PostgreSQL outage drill)**; **QA5** (live OpenAPI import) and **C1** (`735.2 MiB` total stack RAM < `8 GB`) as of 2026-11-18.
+- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **36/36 passing** (`0` failures, `0` skipped) as of 2026-11-19.
+- Live checks (`bash load-tests/run-live-qa.sh`, also run in CI) pass **QA1 (`100%`)**, **QA2 (`p(95) = 2 ms` overhead @ 100 RPS)**, **QA3 (`36,735/36,735` intact)**, **QA4 (real PostgreSQL outage drill)**; **QA5** (live OpenAPI import) and **C1** (`735.2 MiB` total stack RAM < `8 GB`) as of 2026-11-18.
 - Benchmark tip: close memory-heavy apps before QA2 (keep `>= 1.5 GB` host RAM free); see EVIDENCE_REPORT §7.
-- All evidence, ADRs, AI-Usage Log entries (Cases 1–17), and fixes are documented.
+- All evidence, ADRs, AI-Usage Log entries (Cases 1–20), and fixes are documented.
 
 ## 3. Immediate Next Steps for Next Session (TODOs)
 1. **Mid-Project Checkpoint Change Request (Requirement C10):** When the instructor issues the checkpoint change request, implement it as a new pluggable bean/module with zero edits to core orchestrators, and log touched files.
-2. **Live Defence Preparation (Requirement C12):** Rehearse the 15-minute walkthrough of `ADR-001`–`ADR-004`, [EVIDENCE_REPORT.md](file:///e:/Assignment/docs/EVIDENCE_REPORT.md), and on-the-spot modification drill.
+2. **Live Defence Preparation (Requirement C12):** Rehearse the 15-minute walkthrough of `ADR-001`–`ADR-005`, [EVIDENCE_REPORT.md](file:///e:/Assignment/docs/EVIDENCE_REPORT.md), and on-the-spot modification drill.
