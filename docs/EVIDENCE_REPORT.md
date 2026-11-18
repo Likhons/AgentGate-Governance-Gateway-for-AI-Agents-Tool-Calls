@@ -8,31 +8,31 @@
 
 | Requirement / Attribute | Verification Method | Target SLA | Measured Result | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **C5 & C6: Automated Unit, Slice, ArchUnit & Integration Suite** | `./gradlew --no-daemon test` (Testcontainers PostgreSQL 16 + Redis 7.4) | 100% tests passing, 0 cyclic Modulith deps | **31 / 31 tests passed** on 2026-11-18 (`0` failed, `0` skipped; `ArchitectureRulesTest` `6/6` in `31.746s`, `AgentGateQualityAttributesIntegrationTest` `13/13` in `8.868s`) | PASS |
-| **QA1: Security & Injection Defense** | Live Docker `grafana/k6` (`load-tests/qa1_security_suite.k6.js`) + JUnit IT | `100%` malicious blocked; `>= 95%` legitimate pass | **`100.00%` (30 / 30)** malicious blocked/held; **`100.00%` (200 / 200)** legitimate passed (re-run 2026-11-18, [§7](#7-live-re-run-after-ai-usage-log-cases-1114-2026-11-18)) | PASS |
-| **QA2: Gateway Latency @ 100 RPS** | Live Docker `grafana/k6` (`load-tests/qa2_gateway_latency.k6.js`, `60s`) | Overhead `p(95) < 30ms`; End-to-End `p(95) < 40ms`; `>= 95%` pass | Gateway overhead **`p(95) = 1 ms`** (`avg = 0.52 ms`); HTTP `p(95) = 5.97 ms` (`avg = 4.31 ms`); **`100.00%` (6,000 / 6,000)** pass — re-run 2026-11-18 after two failed runs under host memory pressure ([§7](#7-live-re-run-after-ai-usage-log-cases-1114-2026-11-18)) | PASS |
-| **QA3: Hash-Chained Audit Trail & Tamper Detection** | Live `GET /api/v1/audit/verify` + Testcontainers `qa3AuditTrailDetectsTampering` | Tamper detected `< 1 min`; zero broken chain links | **`24,227 / 24,227`** live entries verified **`intact: true`** (2026-11-18); SQL row edit pinpoints `firstTamperedEntryId` | PASS |
-| **QA4: Fail-Safe Under Policy Outage** | Testcontainers `qa4FailSafeAvailabilityUnderPolicyStoreOutage` | `MEDIUM`/`HIGH` fail closed; `LOW` works `<= 5m` on snapshot | `MEDIUM`/`HIGH` blocked (`0%` bypass); `LOW` allowed with `evaluatedFromFailsafeCache = true` | PASS |
+| **C5 & C6: Automated Unit, Slice, ArchUnit & Integration Suite** | `./gradlew --no-daemon test` (Testcontainers PostgreSQL 16 + Redis 7.4) + CI job `live-quality-attributes` running `load-tests/run-live-qa.sh` | 100% tests passing, 0 cyclic Modulith deps, every QA measure scripted in CI | **33 / 33 tests passed** on 2026-11-19 (`0` failed, `0` skipped; `AgentGateQualityAttributesIntegrationTest` `15/15` in `13.417s`, `ArchitectureRulesTest` `6/6` in `9.429s`); live QA1–QA4 script **4 / 4 checks passed** ([§8](#8-real-outage-qa4-live-quality-script-and-ci-2026-11-19)) | PASS |
+| **QA1: Security & Injection Defense** | Live Docker `grafana/k6` (`load-tests/qa1_security_suite.k6.js`, via `run-live-qa.sh`) + JUnit IT | `100%` malicious blocked; `>= 95%` legitimate pass | **`100.00%` (30 / 30)** malicious blocked/held; **`100.00%` (200 / 200)** legitimate passed (2026-11-19, [§8](#8-real-outage-qa4-live-quality-script-and-ci-2026-11-19)) | PASS |
+| **QA2: Gateway Latency @ 100 RPS** | Live Docker `grafana/k6` (`load-tests/qa2_gateway_latency.k6.js`, `60s`, via `run-live-qa.sh`) | Overhead `p(95) < 30ms`; End-to-End `p(95) < 40ms`; `>= 95%` pass | Gateway overhead **`p(95) = 2 ms`** (`avg = 1.05 ms`); HTTP `p(95) = 9.68 ms` (`avg = 6.06 ms`); **`100.00%` (6,001 / 6,001)** pass on 2026-11-19 with the fail-safe caches ([§8](#8-real-outage-qa4-live-quality-script-and-ci-2026-11-19)); earlier runs and two failed runs in §3 and §7 | PASS |
+| **QA3: Hash-Chained Audit Trail & Tamper Detection** | Live `GET /api/v1/audit/verify` + Testcontainers `qa3AuditTrailDetectsTampering` | Tamper detected `< 1 min`; zero broken chain links | **`30,486 / 30,486`** live entries verified **`intact: true`** (2026-11-19, after four outage drills); SQL row edit pinpoints `firstTamperedEntryId` | PASS |
+| **QA4: Fail-Safe Under Policy Outage** | Testcontainers `qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed` (PostgreSQL container paused) + live `docker pause` drill in `run-live-qa.sh` + flag-based `qa4FailSafeAvailabilityUnderPolicyStoreOutage` | `MEDIUM`/`HIGH` fail closed; `LOW` works `<= 5m` on the last known state | With PostgreSQL **paused**: `LOW` call **`200 EXECUTED` in 8 ms**, `MEDIUM`/`HIGH` **`409` fail closed**, `policyStore` health `DOWN` → `UP`, outage-time call hash-chained after recovery ([§8](#8-real-outage-qa4-live-quality-script-and-ci-2026-11-19)) | PASS |
 | **QA5: Zero-Code OpenAPI Onboarding** | Live `POST /api/v1/tools/import-openapi` + `GET /api/v1/tools` | Onboard new REST API with `0` code changes | `qa5_get_order` imported from OpenAPI `3.0.1` JSON, visible in registry (`circuitBreakerState: CLOSED`) | PASS |
 | **C1: Resource Budget (`< 8 GB RAM`)** | `docker stats --no-stream` across all 4 running containers | Total `< 8,192 MiB` | **`528.2 MiB` idle**, **`735.2 MiB` post-load** on 2026-11-18 (`< 9%` of 8 GB ceiling) | PASS |
 
 ---
 
-## 2. Automated Gradle Test Suite Results (Latest Run: 2026-11-18, after AI-Usage Log Cases 11–14)
+## 2. Automated Gradle Test Suite Results (Latest Run: 2026-11-19, after AI-Usage Log Cases 15–17)
 
 Executed with JDK 21 (`--no-daemon test`) against Testcontainers **PostgreSQL 16** and **Redis 7.4**:
 
 | Test Suite | Tests | Failures | Errors | Skipped | Duration |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `com.cse444.agentgate.ArchitectureRulesTest` | 6 | 0 | 0 | 0 | 31.746 s |
-| `com.cse444.agentgate.AgentGateQualityAttributesIntegrationTest` | 13 | 0 | 0 | 0 | 8.868 s |
-| `com.cse444.agentgate.WebSecurityAndProblemDetailsSliceTest` | 6 | 0 | 0 | 0 | 1.437 s |
-| `com.cse444.agentgate.GuardAndStatePatternUnitTest` | 4 | 0 | 0 | 0 | 0.039 s |
+| `com.cse444.agentgate.ArchitectureRulesTest` | 6 | 0 | 0 | 0 | 9.429 s |
+| `com.cse444.agentgate.AgentGateQualityAttributesIntegrationTest` | 15 | 0 | 0 | 0 | 13.417 s |
+| `com.cse444.agentgate.WebSecurityAndProblemDetailsSliceTest` | 6 | 0 | 0 | 0 | 1.068 s |
+| `com.cse444.agentgate.GuardAndStatePatternUnitTest` | 4 | 0 | 0 | 0 | 0.011 s |
 | `com.cse444.agentgate.PolicyAndConditionUnitTest` | 2 | 0 | 0 | 0 | 0.005 s |
-| **Total** | **31** | **0** | **0** | **0** | **42.095 s** |
+| **Total** | **33** | **0** | **0** | **0** | **23.930 s** |
 
-Each of the four fix commits for Cases 11–14 passed the full suite on its own (29 → 30 → 31 → 31 tests).
-*Previous run (post-QA2 optimization, before Cases 11–14):* 25 / 25 passed in 18.146 s (integration suite 9 tests).
+*Earlier runs:* 31 / 31 on 2026-11-18 after Cases 11–14 (each of those four commits passed on its own: 29 → 30 → 31 → 31);
+25 / 25 after the QA2 optimization (integration suite 9 tests).
 
 Covered integration test scenarios in [AgentGateQualityAttributesIntegrationTest.java](../src/test/java/com/cse444/agentgate/AgentGateQualityAttributesIntegrationTest.java):
 - `qa1RedTeamSuiteIs100PercentBlockedOrHeldForApproval`
@@ -48,6 +48,9 @@ Covered integration test scenarios in [AgentGateQualityAttributesIntegrationTest
 - `fr4ApprovedCallWithFailingDownstreamReportsExecutionFailed` *(Case 11: `EXECUTION_FAILED` instead of a stuck `PENDING`)*
 - `fr4ApproverWebhooksUseToolConfiguredUrlWithRedactedArguments` *(Case 12: admin-configured, PII-redacted approver webhooks)*
 - `fr1McpServerToolListFollowsRegistryAtRuntime` *(Case 13: live MCP tool list follows the registry and kill switches)*
+- `qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed` *(Case 15: PostgreSQL container paused; LOW works, MEDIUM/HIGH fail closed, audits catch up)*
+- `fr1McpToolsListsOnlyToolsTheAgentIsPermittedToCall` *(Case 16: `/mcp/tools` shows each agent only its permitted tools)*
+- `fr1McpDownstreamFr10CircuitBreakerAndObservabilityEndpoints` now asserts the real MCP handshake (`initialize` → `notifications/initialized` → `tools/call`) *(Case 16)*
 
 ---
 
@@ -544,3 +547,136 @@ after the runs:
 ```
 `docker logs agentgate-app` for the whole re-run: **`0` `ERROR` logs**, **`0` HikariCP connection timeouts**,
 **`0` duplicate-sequence exceptions**, and exactly the `110` `DAILY_QUOTA` breaches explained in §7.2.
+
+---
+
+## 8. Real-Outage QA4, Live Quality Script and CI (2026-11-19)
+
+Fixes for AI-usage log Cases 15–17: last-known-good caches and a 2-second policy-store probe for QA4, the MCP Java SDK
+client for downstream MCP tools with per-agent tool discovery (FR1), and `load-tests/run-live-qa.sh`, which runs the
+QA2 and QA1 k6 suites, a QA4 PostgreSQL outage drill (`docker pause agentgate-postgres`) and the QA3 chain verification.
+CI runs the same script in the `live-quality-attributes` job against a Docker Compose stack started with a throw-away `.env`.
+
+### 8.1 QA4 With a Real Database Outage
+
+- **Testcontainers** (`qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed`, `6.717 s`): with the PostgreSQL
+  container paused, `QA4 outage: LOW-risk call EXECUTED in 8 ms from cached state`; the `MEDIUM` refund and `HIGH` payout
+  failed closed; after unpausing, the outage-time call appeared in the audit search and `verifyChainIntegrity()` stayed intact.
+- **Live Docker Compose drill** (`bash load-tests/run-live-qa.sh qa4 qa3`, request times measured by curl):
+```text
+== qa4: PostgreSQL outage drill (docker pause agentgate-postgres)
+policyStore health during the outage: DOWN
+PASS  qa4: LOW-risk call during the outage -> 200 EXECUTED in 8 ms
+PASS  qa4: MEDIUM-risk call during the outage -> 409 fail closed
+PASS  qa4: HIGH-risk call during the outage -> 409 fail closed
+PASS  qa4: the outage-time call was hash-chained after recovery (policyStore UP)
+== qa3: audit hash chain verification
+PASS  qa3: "totalRecordsVerified":30486 intact
+== 0 failed check(s); results in build/live-qa/
+```
+> Before the fix, code review (Case 15) found that the same outage would have made calls wait on Hikari's 30-second
+> connection timeout and, once the 10-second caches expired, fail; QA4 had only been verified by flipping a flag.
+
+### 8.2 Full Script Run (`bash load-tests/run-live-qa.sh qa1 qa4 qa3 qa2`)
+```text
+== qa1: k6 load-tests/qa1_security_suite.k6.js
+PASS  qa1: k6 thresholds met
+    ✓ 'rate>=0.95' rate=100.00%
+    ✓ 'rate==1.0' rate=100.00%
+== qa4: PostgreSQL outage drill (docker pause agentgate-postgres)
+policyStore health during the outage:
+PASS  qa4: LOW-risk call during the outage -> 200 EXECUTED in 290 ms
+PASS  qa4: MEDIUM-risk call during the outage -> 409 fail closed
+PASS  qa4: HIGH-risk call during the outage -> 409 fail closed
+PASS  qa4: the outage-time call was hash-chained after recovery (policyStore )
+== qa3: audit hash chain verification
+PASS  qa3: "totalRecordsVerified":24467 intact
+== qa2: k6 load-tests/qa2_gateway_latency.k6.js
+PASS  qa2: k6 thresholds met
+    ✓ 'p(95)<30' p(95)=2ms
+    ✓ 'p(95)<40' p(95)=9.68ms
+    ✓ 'rate>=0.95' rate=100.00%
+== 0 failed check(s); results in build/live-qa/
+```
+The empty `policyStore` value above was a bug in the script, not the gateway: Jackson 3 orders `details` before `status`.
+After the parser was fixed, the re-run in §8.1 shows `DOWN` during the outage and `UP` after it. The `290 ms` in this first
+run was measured with shell timestamps, which include the cost of starting processes in Git Bash on Windows; §8.1 uses
+curl's own request time.
+
+### 8.3 Raw k6 Output — QA2 From the Script Run (exit code `0`)
+```text
+  █ THRESHOLDS
+
+    agentgate_gateway_overhead_ms
+    ✓ 'p(95)<30' p(95)=2ms
+
+    http_req_duration
+    ✓ 'p(95)<40' p(95)=9.68ms
+
+    qa1_legitimate_pass_rate
+    ✓ 'rate>=0.95' rate=100.00%
+
+
+  █ TOTAL RESULTS
+
+    checks_total.......: 12002   198.276293/s
+    checks_succeeded...: 100.00% 12002 out of 12002
+    checks_failed......: 0.00%   0 out of 12002
+
+    ✓ status is 200
+    ✓ outcome is EXECUTED
+
+    CUSTOM
+    agentgate_gateway_overhead_ms...: avg=1.05ms min=0s     med=1ms    max=22ms     p(90)=2ms    p(95)=2ms
+    qa1_legitimate_pass_rate........: 100.00% 6001 out of 6001
+
+    HTTP
+    http_req_duration...............: avg=6.06ms min=1.92ms med=5.13ms max=180.73ms p(90)=7.99ms p(95)=9.68ms
+      { expected_response:true }....: avg=6.05ms min=1.92ms med=5.13ms max=180.73ms p(90)=7.99ms p(95)=9.67ms
+    http_req_failed.................: 0.01%   1 out of 6006
+    http_reqs.......................: 6006    99.220748/s
+
+    EXECUTION
+    iteration_duration..............: avg=6.33ms min=3.49ms med=5.45ms max=181.29ms p(90)=8.34ms p(95)=10.03ms
+    iterations......................: 6001    99.138146/s
+    vus.............................: 1       min=0            max=1
+    vus_max.........................: 30      min=30           max=30
+```
+
+### 8.4 Raw k6 Output — QA1 From the Script Run (exit code `0`)
+```text
+  █ THRESHOLDS
+
+    qa1_legitimate_pass_rate
+    ✓ 'rate>=0.95' rate=100.00%
+
+    qa1_malicious_blocked_rate
+    ✓ 'rate==1.0' rate=100.00%
+
+
+  █ TOTAL RESULTS
+
+    checks_total.......: 1       0.192367/s
+    checks_succeeded...: 100.00% 1 out of 1
+    checks_failed......: 0.00%   0 out of 1
+
+    ✓ QA1 suite completed
+
+    CUSTOM
+    qa1_legitimate_pass_rate.......: 100.00% 200 out of 200
+    qa1_malicious_blocked_rate.....: 100.00% 30 out of 30
+
+    HTTP
+    http_req_duration..............: avg=21.31ms min=7.38ms med=13.58ms max=357.23ms p(90)=20.72ms p(95)=46.56ms
+      { expected_response:true }...: avg=20.45ms min=8.45ms med=13.67ms max=357.23ms p(90)=20.57ms p(95)=38.34ms
+    http_req_failed................: 12.08%  29 out of 240
+    http_reqs......................: 240     46.168049/s
+
+    EXECUTION
+    iteration_duration.............: avg=3.61s   min=3.61s  med=3.61s   max=3.61s    p(90)=3.61s   p(95)=3.61s
+    iterations.....................: 1       0.192367/s
+    vus............................: 1       min=0          max=1
+    vus_max........................: 1       min=1          max=1
+```
+> QA1's setup now gives `lookup_order` the same daily budget as QA2 (Case 17), so the suites no longer depend on run
+> order (compare run C in §7).

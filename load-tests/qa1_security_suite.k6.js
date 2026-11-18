@@ -82,8 +82,10 @@ export function setup() {
         description: 'High risk requires approval',
     }), { headers: adminHeaders });
 
+    // Same lookup_order budget as the QA2 load test, so the suites can run in any order and more than
+    // once a day without the FR6 daily quota (working as designed) skewing the legitimate pass rate
     http.put(`${BASE_URL}/api/v1/limits`, JSON.stringify({
-        agentClientId: clientId, toolName: 'lookup_order', requestsPerMinute: 1000, dailyQuota: 10000, writeBlastRadiusPerHour: 1000,
+        agentClientId: clientId, toolName: 'lookup_order', requestsPerMinute: 20000, dailyQuota: 1000000, writeBlastRadiusPerHour: 10000,
     }), { headers: adminHeaders });
     http.put(`${BASE_URL}/api/v1/limits`, JSON.stringify({
         agentClientId: clientId, toolName: 'issue_refund', requestsPerMinute: 1000, dailyQuota: 10000, writeBlastRadiusPerHour: 1000,

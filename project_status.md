@@ -33,12 +33,17 @@
   - C2: no secret defaults, `dev`/`docker`/`test` profiles, `.env` import, secret length validation, Compose `${VAR:?}`.
   - One commit per fix; every commit passes the full suite on JDK 21 + Testcontainers PostgreSQL 16 / Redis 7.4 (29 → 30 → 31 → 31 tests).
   - Live re-verification (2026-11-18): `docker compose up` with a real `.env` (docker profile; `V7`/`V8` applied on the existing volume); QA2 **`p(95) = 1 ms`** overhead / `5.97 ms` HTTP (`6,000/6,000`), QA1 **`30/30`** blocked + **`200/200`** legitimate, **`24,227`** audit entries intact, `735.2 MiB` stack RAM post-load. Two earlier QA2 runs failed under host memory pressure (only `0.8 GB` of `7.7 GB` free) and one QA1 run hit the FR6 daily quota — recorded with root causes in `EVIDENCE_REPORT.md` §7.
+- **Step 10 — Real QA4 Fail-Safe, MCP Client, Permitted Discovery and CI Live Checks (2026-11-19, AI-Usage Log Cases 15–17):**
+  - QA4: `FailSafeCaches` last-known-good caches for agents, tools and limits, non-transactional cached reads, a 2 s policy-store probe (`policyStore` health component), Hikari 2 s connection / 30 s socket timeouts, and an in-order audit retry queue. Verified with the PostgreSQL container paused (LOW call in 8 ms, MEDIUM/HIGH fail closed, outage call audited after recovery) in Testcontainers and live.
+  - FR1: `McpDownstreamToolAdapter` uses the MCP Java SDK client (`initialize` handshake, Streamable HTTP or SSE); `GET /mcp/tools` (now in the gateway module) lists only the tools each agent's policies allow.
+  - C5: `load-tests/run-live-qa.sh` (QA2, QA1, QA4 drill, QA3) runs locally and in the new `live-quality-attributes` CI job; QA1 no longer depends on run order.
+  - Full suite 33/33; live script 4/4 checks passed (QA2 `p(95) = 2 ms` overhead, QA1 30/30 + 200/200, QA3 30,486 intact).
 
 ## 2. Current State of the Application
-- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **31/31 passing** (`0` failures, `0` skipped) as of 2026-11-18.
-- Live Docker Compose + `grafana/k6` benchmark suite (re-run 2026-11-18) passes **QA1 (`100%`)**, **QA2 (`p(95) = 1 ms` overhead @ 100 RPS)**, **QA3 (`24,227/24,227` intact)**, **QA4 (Testcontainers verified)**, **QA5 (live OpenAPI import verified)**, and **C1 (`735.2 MiB` total stack RAM < `8 GB`)**.
-- Benchmark tip: close memory-heavy apps first (keep `>= 1.5 GB` host RAM free) and run QA2 before QA1, or QA1's `10,000`/day `lookup_order` quota is exhausted by QA2.
-- All evidence, ADRs, AI-Usage Log entries (Cases 1–14), and fixes are documented and committed.
+- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **33/33 passing** (`0` failures, `0` skipped) as of 2026-11-19.
+- Live checks (`bash load-tests/run-live-qa.sh`, also run in CI) pass **QA1 (`100%`)**, **QA2 (`p(95) = 2 ms` overhead @ 100 RPS)**, **QA3 (`30,486/30,486` intact)**, **QA4 (real PostgreSQL outage drill)**; **QA5** (live OpenAPI import) and **C1** (`735.2 MiB` total stack RAM < `8 GB`) as of 2026-11-18.
+- Benchmark tip: close memory-heavy apps before QA2 (keep `>= 1.5 GB` host RAM free); see EVIDENCE_REPORT §7.
+- All evidence, ADRs, AI-Usage Log entries (Cases 1–17), and fixes are documented.
 
 ## 3. Immediate Next Steps for Next Session (TODOs)
 1. **Mid-Project Checkpoint Change Request (Requirement C10):** When the instructor issues the checkpoint change request, implement it as a new pluggable bean/module with zero edits to core orchestrators, and log touched files.

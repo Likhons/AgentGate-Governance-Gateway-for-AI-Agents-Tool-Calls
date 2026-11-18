@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -32,3 +32,54 @@ jobs:
         with:
           name: gradle-test-reports
           path: build/reports/tests/test/
+
+  # C5: every quality-attribute measure runs as a script in CI, against the real Docker Compose stack
+  live-quality-attributes:
+    needs: build-and-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Create a throw-away .env for this run (no secrets in the repository, C2)
+        run: |
+          rand() { openssl rand -hex "$1"; }
+          {
+            echo "POSTGRES_DB=agentgate"
+            echo "POSTGRES_USER=agentgate"
+            echo "POSTGRES_PASSWORD=$(rand 16)"
+            echo "AGENTGATE_SECURITY_JWT_SECRET=$(rand 32)"
+            echo "AGENTGATE_AUDIT_HMAC_SECRET=$(rand 32)"
+            echo "AGENTGATE_ADMIN_USERNAME=user"
+            echo "AGENTGATE_ADMIN_PASSWORD=$(rand 12)"
+            echo "AGENTGATE_APPROVER_USERNAME=approver"
+            echo "AGENTGATE_APPROVER_PASSWORD=$(rand 12)"
+            echo "AGENTGATE_AUDITOR_USERNAME=auditor"
+            echo "AGENTGATE_AUDITOR_PASSWORD=$(rand 12)"
+            echo "AGENTGATE_APPROVAL_WEBHOOK_URL="
+          } > .env
+          while IFS='=' read -r key value; do
+            case "$key" in *PASSWORD|*SECRET) echo "::add-mask::$value" ;; esac
+          done < .env
+
+      - name: Start the stack (C1, docker profile) with the benchmark mock downstream
+        run: docker compose --profile benchmark up -d --build --wait --wait-timeout 300
+
+      - name: QA2 (k6 latency), QA1 (k6 red team), QA4 (PostgreSQL outage drill), QA3 (audit verify)
+        run: bash load-tests/run-live-qa.sh
+
+      - name: Upload live QA results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-qa-results
+          path: build/live-qa/
+
+      - name: Show gateway logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 300 agentgate
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose --profile benchmark down -v

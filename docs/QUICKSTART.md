@@ -100,6 +100,13 @@ New and edited tools appear on the MCP endpoint within `agentgate.mcp.tool-sync-
 without a restart; a tool kill switch withdraws the tool immediately (FR1, FR8, FR10). `GET /mcp/tools`
 with the agent's token lists only the tools that agent's policies allow.
 
+### Optional: Run the Live Quality-Attribute Checks (C5)
+```bash
+docker compose --profile benchmark up -d --wait   # adds the nginx mock downstream used by the k6 suites
+bash load-tests/run-live-qa.sh                    # QA2 + QA1 (k6), QA4 PostgreSQL outage drill, QA3 verify
+```
+The QA4 drill pauses the `agentgate-postgres` container for a few seconds and unpauses it again.
+
 ---
 
 ## Part 2: AI-Usage Log (Requirement C11)
@@ -165,3 +172,6 @@ with the agent's token lists only the tools that agent's policies allow.
 16. **Case 16 — Downstream MCP Calls Skipped the MCP Protocol and Discovery Ignored Permissions (`FR1`):**
     - *Issue Found:* `McpDownstreamToolAdapter` POSTed a bare JSON-RPC `tools/call` without the `initialize` handshake, so it only worked against the test mock, and the Spring AI MCP client starter was never used; `GET /mcp/tools` listed every healthy tool to every agent instead of the tools each agent is permitted to call.
     - *Fix Applied:* The adapter now uses the MCP Java SDK client (`McpClient.sync`, Streamable HTTP or SSE transport, one initialized session per downstream URL, reconnect after a transport error), and the test mock is a minimal Streamable HTTP MCP server that records the handshake. `McpUnifiedEndpointController` moved to the gateway module and filters by `PolicyEngineService#isToolPermittedForAgent`; administrators still see every tool. The MCP SDK's `tools/list` is server-wide, so there permissions are enforced at call time. Covered by `fr1McpDownstreamFr10CircuitBreakerAndObservabilityEndpoints` and `fr1McpToolsListsOnlyToolsTheAgentIsPermittedToCall`.
+17. **Case 17 — CI Did Not Run the Quality-Attribute Scripts (`C5`):**
+    - *Issue Found:* C5 asks that every quality-attribute measure runs as a script and that "CI runs them all", but the workflow only ran `./gradlew test`; the k6 suites were run by hand, and QA1 failed when run after QA2 on the same day because its setup set a 10,000-call daily quota.
+    - *Fix Applied:* Added `load-tests/run-live-qa.sh` (QA2 and QA1 k6 suites, the QA4 PostgreSQL outage drill with `docker pause`, and the QA3 chain verification) and a `live-quality-attributes` CI job that starts the Docker Compose stack with a throw-away `.env` and runs it; QA1 now sets the same `lookup_order` budget as QA2 so the suites can run in any order. Also moved the workflow to `actions/checkout@v5` and `actions/setup-java@v5`.
