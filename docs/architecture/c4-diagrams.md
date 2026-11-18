@@ -60,9 +60,9 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph AgentGate["com.cse444.agentgate (Spring Modulith Bounded Contexts)"]
-        Gateway["gateway\nGatewayController\nGatewayOrchestrationService\n(Facade / Command Orchestrator)"]
+        Gateway["gateway\nGatewayController, McpUnifiedEndpointController\nGatewayOrchestrationService\n(Facade / Command Orchestrator)\nMcpToolListSynchronizer, McpToolCallbackBridge"]
         Identity["identity (FR2, FR8)\nAgentIdentityController\nAgentIdentityService\nOAuth2 Client Credentials & Agent Kill Switch"]
-        Registry["registry (FR1, FR8, FR10)\nToolRegistryService, OpenApiToolImporterService\nMcpUnifiedEndpointController\nResilientDownstreamInvoker\nRestDownstreamToolAdapter, McpDownstreamToolAdapter"]
+        Registry["registry (FR1, FR8, FR10)\nToolRegistryService, OpenApiToolImporterService\nResilientDownstreamInvoker\nRestDownstreamToolAdapter\nMcpDownstreamToolAdapter (MCP SDK client)"]
         Policy["policy (FR3, FR9, QA4)\nPolicyEngineService (10s Hot-Reload + 5m Fail-Safe)\nPolicyConditionEvaluator\nAgentGateAuthorizationManager"]
         Guard["guard (FR5, FR6, QA1)\nGuardPipelineService\nJsonSchemaValidationGuard (@Order 10)\nArgumentSmugglingSecurityGuard (@Order 20)\nRateLimitAndBlastRadiusGuard (@Order 30)\nPiiRedactionOutputGuard (@Order 10)\nPayloadTruncationOutputGuard (@Order 20)"]
         Approval["approval (FR4, FR8)\nApprovalWorkflowService\nApprovalLifecycleState (State Pattern)\nApprovalWebhookNotifier"]

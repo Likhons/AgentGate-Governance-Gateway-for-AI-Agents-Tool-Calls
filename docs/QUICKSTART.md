@@ -97,7 +97,8 @@ curl -u "$ADMIN" http://localhost:8080/api/v1/audit/verify
 ```
 
 New and edited tools appear on the MCP endpoint within `agentgate.mcp.tool-sync-interval` (5 s)
-without a restart; a tool kill switch withdraws the tool immediately (FR1, FR8, FR10).
+without a restart; a tool kill switch withdraws the tool immediately (FR1, FR8, FR10). `GET /mcp/tools`
+with the agent's token lists only the tools that agent's policies allow.
 
 ---
 
@@ -161,3 +162,6 @@ without a restart; a tool kill switch withdraws the tool immediately (FR1, FR8, 
 15. **Case 15 — QA4 Fail-Safe Only Worked in a Simulated Outage (`QA4`, `FR7`):**
     - *Issue Found:* Code review showed the QA4 test only flipped a flag. In a real PostgreSQL outage the agent, tool and limit caches expired after 10 s and `@Transactional` reads needed a connection even on cache hits, so LOW-risk calls blocked on Hikari's 30 s connection timeout and then failed instead of running for 5 minutes; MEDIUM/HIGH detection waited for the next 10 s policy refresh; and failed audit batches were dropped.
     - *Fix Applied:* Added `FailSafeCaches` last-known-good caches (background refresh, served during the outage, expiring after the 5-minute fail-safe TTL) to `AgentIdentityService`, `ToolRegistryService` and `RateLimitAndBlastRadiusGuard`; removed the transactions from the cached reads; added a bounded 2 s policy-store probe and a `policyStore` health component; set Hikari's connection timeout to 2 s with a 30 s socket timeout; and made `AuditTrailService` keep failed batches in order and retry them. Covered by `qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed`, which pauses the PostgreSQL container (LOW-risk call in 8 ms, MEDIUM/HIGH fail closed, outage-time call audited after recovery).
+16. **Case 16 — Downstream MCP Calls Skipped the MCP Protocol and Discovery Ignored Permissions (`FR1`):**
+    - *Issue Found:* `McpDownstreamToolAdapter` POSTed a bare JSON-RPC `tools/call` without the `initialize` handshake, so it only worked against the test mock, and the Spring AI MCP client starter was never used; `GET /mcp/tools` listed every healthy tool to every agent instead of the tools each agent is permitted to call.
+    - *Fix Applied:* The adapter now uses the MCP Java SDK client (`McpClient.sync`, Streamable HTTP or SSE transport, one initialized session per downstream URL, reconnect after a transport error), and the test mock is a minimal Streamable HTTP MCP server that records the handshake. `McpUnifiedEndpointController` moved to the gateway module and filters by `PolicyEngineService#isToolPermittedForAgent`; administrators still see every tool. The MCP SDK's `tools/list` is server-wide, so there permissions are enforced at call time. Covered by `fr1McpDownstreamFr10CircuitBreakerAndObservabilityEndpoints` and `fr1McpToolsListsOnlyToolsTheAgentIsPermittedToCall`.

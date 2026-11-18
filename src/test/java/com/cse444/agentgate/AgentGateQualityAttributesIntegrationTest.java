@@ -34,7 +34,11 @@ import com.cse444.agentgate.shared.domain.PolicyEffect;
 import com.cse444.agentgate.shared.domain.RiskLevel;
 import com.cse444.agentgate.shared.domain.ToolType;
 import com.cse444.agentgate.shared.error.LimitExceededException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.dockerjava.api.DockerClient;
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -99,6 +103,8 @@ class AgentGateQualityAttributesIntegrationTest {
     private static int mockPort;
     private static final AtomicBoolean flakyShouldFail = new AtomicBoolean(false);
     private static final ConcurrentLinkedQueue<String> approverWebhookBodies = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<String> mockMcpMethodsSeen = new ConcurrentLinkedQueue<>();
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     @LocalServerPort
     private int serverPort;
@@ -151,8 +157,7 @@ class AgentGateQualityAttributesIntegrationTest {
                 sendJson(exchange, 200, "{\"refunded\":true,\"status\":\"OK\"}"));
         mockDownstreamServer.createContext("/payouts", exchange ->
                 sendJson(exchange, 200, "{\"payoutId\":\"PAY-777\",\"contact\":\"finance@example.com\",\"phone\":\"+8801819876543\"}"));
-        mockDownstreamServer.createContext("/mcp-downstream", exchange ->
-                sendJson(exchange, 200, "{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"mcp-downstream-ok\"}]}}"));
+        mockDownstreamServer.createContext("/mcp-downstream", AgentGateQualityAttributesIntegrationTest::handleMockMcpServer);
         mockDownstreamServer.createContext("/flaky", exchange -> {
             if (flakyShouldFail.get()) {
                 sendJson(exchange, 500, "{\"error\":\"downstream unavailable\"}");
@@ -184,6 +189,48 @@ class AgentGateQualityAttributesIntegrationTest {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+    }
+
+    /**
+     * Minimal Streamable HTTP MCP server standing in for a downstream MCP tool server (FR1): answers
+     * initialize, the initialized notification and tools/call, and refuses the optional GET stream and
+     * DELETE session with 405, as a stateless MCP server may.
+     */
+    private static void handleMockMcpServer(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(405, -1);
+            exchange.close();
+            return;
+        }
+        JsonNode message = JSON.readTree(exchange.getRequestBody());
+        String method = message.path("method").asText();
+        mockMcpMethodsSeen.add(method);
+        if (!message.has("id")) {
+            exchange.sendResponseHeaders(202, -1);
+            exchange.close();
+            return;
+        }
+        ObjectNode response = JSON.createObjectNode().put("jsonrpc", "2.0");
+        response.set("id", message.get("id"));
+        switch (method) {
+            case "initialize" -> {
+                ObjectNode result = response.putObject("result");
+                result.set("protocolVersion", message.path("params").path("protocolVersion"));
+                result.putObject("capabilities").putObject("tools");
+                result.putObject("serverInfo").put("name", "mock-mcp-downstream").put("version", "1.0.0");
+            }
+            case "tools/call" -> {
+                ObjectNode result = response.putObject("result");
+                result.putArray("content").addObject()
+                        .put("type", "text")
+                        .put("text", "mcp-downstream-ok:" + message.path("params").path("name").asText());
+                result.put("isError", false);
+            }
+            case "ping" -> response.putObject("result");
+            default -> response.putObject("error").put("code", -32601).put("message", "Method not found: " + method);
+        }
+        exchange.getResponseHeaders().add("Mcp-Session-Id", "mock-mcp-session");
+        sendJson(exchange, 200, JSON.writeValueAsString(response));
     }
 
     @BeforeEach
@@ -501,7 +548,9 @@ class AgentGateQualityAttributesIntegrationTest {
                 "cust-100"
         ));
         assertThat(mcpRes.outcome()).isEqualTo("EXECUTED");
-        assertThat(mcpRes.redactedResultPayload()).contains("mcp-downstream-ok");
+        assertThat(mcpRes.redactedResultPayload()).contains("mcp-downstream-ok:mcp_downstream_ping");
+        // A real MCP session: initialize handshake and initialized notification before tools/call (MCP SDK client)
+        assertThat(mockMcpMethodsSeen).containsSubsequence("initialize", "notifications/initialized", "tools/call");
 
         // 2. Trigger 5 consecutive downstream HTTP 500 errors on flaky_tool -> opens CircuitBreaker (FR10)
         flakyShouldFail.set(true);
@@ -987,6 +1036,43 @@ class AgentGateQualityAttributesIntegrationTest {
     }
 
     @Test
+    @DisplayName("FR1 Permitted Discovery: /mcp/tools lists only the tools each agent's policies allow; administrators see all")
+    void fr1McpToolsListsOnlyToolsTheAgentIsPermittedToCall() {
+        toolRegistryService.registerOrUpdateTool(new RegisterToolRequest(
+                "reporting_export",
+                "Report export only rate-limited-bot is allowed to call",
+                "{\"type\":\"object\",\"properties\":{\"month\":{\"type\":\"string\"}}}",
+                RiskLevel.LOW,
+                "AnalyticsTeam",
+                ToolType.REST,
+                false,
+                "http://127.0.0.1:" + mockPort + "/orders/report",
+                "GET",
+                2000,
+                null
+        ));
+        policyEngineService.createOrVersionPolicyRule(new CreatePolicyRuleRequest(
+                "allow-rate-limited-bot-reporting-export",
+                80,
+                "rate-limited-bot",
+                "reporting_export",
+                PolicyEffect.ALLOW,
+                List.of(),
+                false,
+                "FR1 permitted discovery"
+        ), "security-admin");
+
+        List<String> supportBotTools = discoveredToolNames("Bearer " + issueAgentAccessToken("support-bot", "support-secret-2026"));
+        List<String> rateLimitedBotTools = discoveredToolNames("Bearer " + issueAgentAccessToken("rate-limited-bot", "rate-secret-2026"));
+        List<String> adminTools = discoveredToolNames("Basic " + java.util.Base64.getEncoder()
+                .encodeToString("user:test-admin-pass".getBytes(StandardCharsets.UTF_8)));
+
+        assertThat(supportBotTools).contains("lookup_order", "issue_refund").doesNotContain("reporting_export");
+        assertThat(rateLimitedBotTools).contains("reporting_export", "issue_refund").doesNotContain("lookup_order");
+        assertThat(adminTools).contains("reporting_export", "lookup_order", "issue_refund");
+    }
+
+    @Test
     @DisplayName("QA4 Real Outage: with PostgreSQL paused, LOW-risk calls keep working on cached state, MEDIUM/HIGH fail closed, audits catch up")
     void qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed() {
         // Warm the hot-path caches (agent, tools, limits, write cap) while the database is up
@@ -1028,6 +1114,19 @@ class AgentGateQualityAttributesIntegrationTest {
         awaitTrue(Duration.ofSeconds(30), () -> !auditTrailService.searchAuditLogs(
                 "support-bot", "cust-qa4-outage", "lookup_order", "EXECUTED", null, PageRequest.of(0, 5)).isEmpty());
         assertThat(auditTrailService.verifyChainIntegrity().intact()).isTrue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> discoveredToolNames(String authorizationHeader) {
+        Map<String, Object> body = RestClient.create("http://localhost:" + serverPort).get()
+                .uri("/mcp/tools")
+                .header("Authorization", authorizationHeader)
+                .retrieve()
+                .body(Map.class);
+        assertThat(body).isNotNull();
+        return ((List<Map<String, Object>>) body.get("tools")).stream()
+                .map(tool -> (String) tool.get("name"))
+                .toList();
     }
 
     private static void awaitTrue(Duration timeout, BooleanSupplier condition) {

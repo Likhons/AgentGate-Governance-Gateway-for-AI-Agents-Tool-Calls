@@ -314,6 +314,28 @@ public class PolicyEngineService {
         this.simulatedOutage.set(!reachable);
     }
 
+    /**
+     * FR1: Whether the agent may call the tool under the active policies, i.e. a matching ALLOW rule exists
+     * (possibly with argument conditions) and no unconditional DENY rule takes precedence. Used to show an
+     * agent only the tools it is permitted to call; every call is still evaluated in full.
+     * Mirrors {@link #evaluateAgainstRules}: dry-run DENY rules never block.
+     */
+    public boolean isToolPermittedForAgent(String agentClientId, String toolName) {
+        for (CompiledPolicyRule compiled : activeSnapshot.get().rules()) {
+            PolicyRule rule = compiled.rule();
+            if (!matchesPattern(rule.getAgentPattern(), agentClientId) || !matchesPattern(rule.getToolPattern(), toolName)) {
+                continue;
+            }
+            if (rule.getEffect() == PolicyEffect.ALLOW) {
+                return true;
+            }
+            if (!rule.isDryRun() && compiled.conditions().isEmpty()) {
+                return false;
+            }
+        }
+        return false;
+    }
+
     private PolicyEvaluationDecision evaluateAgainstRules(
             String agentClientId,
             String delegatedUserId,
