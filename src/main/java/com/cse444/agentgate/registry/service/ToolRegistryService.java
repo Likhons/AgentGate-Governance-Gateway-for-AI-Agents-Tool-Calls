@@ -8,10 +8,11 @@ import com.cse444.agentgate.registry.domain.RegisteredTool;
 import com.cse444.agentgate.registry.domain.RegisteredToolRepository;
 import com.cse444.agentgate.registry.dto.RegisterToolRequest;
 import com.cse444.agentgate.registry.dto.ToolResponse;
+import com.cse444.agentgate.shared.config.AgentGateProperties;
 import com.cse444.agentgate.shared.domain.ToolStatus;
 import com.cse444.agentgate.shared.event.KillSwitchActivatedEvent;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.cse444.agentgate.shared.util.FailSafeCaches;
+import com.github.benmanes.caffeine.cache.LoadingCache;
 import jakarta.annotation.PostConstruct;
 import jakarta.persistence.EntityNotFoundException;
 import org.springframework.context.ApplicationEventPublisher;
@@ -20,7 +21,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -41,21 +41,30 @@ public class ToolRegistryService {
 
     // In-memory fast flag synced with DB for sub-millisecond write-kill-switch checks (QA2)
     private final AtomicBoolean allWriteToolsDisabled = new AtomicBoolean(false);
-    private final Cache<String, RegisteredTool> toolCache = Caffeine.newBuilder()
-            .maximumSize(2000)
-            .expireAfterWrite(Duration.ofSeconds(10))
-            .build();
+    /**
+     * Last-known-good tool metadata (QA4): refreshed in the background and served from cache while
+     * PostgreSQL is unreachable, for at most the low-risk fail-safe TTL. Kill switches and
+     * re-registration on this instance invalidate the entry immediately (FR8).
+     */
+    private final LoadingCache<String, RegisteredTool> toolCache;
 
     public ToolRegistryService(
             RegisteredToolRepository toolRepository,
             GlobalKillSwitchRepository killSwitchRepository,
             ResilientDownstreamInvoker downstreamInvoker,
-            ApplicationEventPublisher eventPublisher
+            ApplicationEventPublisher eventPublisher,
+            AgentGateProperties properties
     ) {
         this.toolRepository = toolRepository;
         this.killSwitchRepository = killSwitchRepository;
         this.downstreamInvoker = downstreamInvoker;
         this.eventPublisher = eventPublisher;
+        this.toolCache = FailSafeCaches.lastKnownGood(
+                2000,
+                properties.policy().refreshInterval(),
+                properties.policy().lowRiskFailsafeTtl(),
+                name -> toolRepository.findByName(name).orElse(null)
+        );
     }
 
     @PostConstruct
@@ -124,16 +133,15 @@ public class ToolRegistryService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * Not transactional on purpose: the cached path must not need a database connection (QA4).
+     */
     public RegisteredTool getRequiredToolByName(String toolName) {
-        RegisteredTool cached = toolCache.getIfPresent(toolName);
-        if (cached != null) {
-            return cached;
+        RegisteredTool tool = toolCache.get(toolName);
+        if (tool == null) {
+            throw new EntityNotFoundException("Tool not found: " + toolName);
         }
-        RegisteredTool found = toolRepository.findByName(toolName)
-                .orElseThrow(() -> new EntityNotFoundException("Tool not found: " + toolName));
-        toolCache.put(toolName, found);
-        return found;
+        return tool;
     }
 
     /**

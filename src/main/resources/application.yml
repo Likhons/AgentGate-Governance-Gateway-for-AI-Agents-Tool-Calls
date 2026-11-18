@@ -30,6 +30,12 @@ spring:
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
+      # QA4: fail fast instead of blocking for Hikari's 30 s default when PostgreSQL is unreachable,
+      # and never wait forever on a half-open connection
+      connection-timeout: 2000
+      validation-timeout: 1000
+      data-source-properties:
+        socketTimeout: 30
   jpa:
     open-in-view: false
     hibernate:
@@ -86,6 +92,9 @@ agentgate:
     refresh-interval: 10s
     low-risk-failsafe-ttl: 5m
     default-decision-deny: true
+    # QA4: how often and how patiently the policy store (PostgreSQL) is probed for an outage
+    store-probe-interval: 2s
+    store-probe-timeout: 1500ms
   approval:
     default-timeout: 15m
     webhook-timeout: 3s

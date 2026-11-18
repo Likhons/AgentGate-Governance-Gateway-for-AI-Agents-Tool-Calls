@@ -72,7 +72,8 @@ class GuardAndStatePatternUnitTest {
                         "auditor",
                         "auditor-pass"
                 ),
-                new AgentGateProperties.PolicyProperties(Duration.ofSeconds(10), Duration.ofMinutes(5), true),
+                new AgentGateProperties.PolicyProperties(Duration.ofSeconds(10), Duration.ofMinutes(5), true,
+                        Duration.ofSeconds(2), Duration.ofMillis(1500)),
                 new AgentGateProperties.ApprovalProperties(Duration.ofMinutes(15), Duration.ofSeconds(3), ""),
                 new AgentGateProperties.GuardProperties(32, "[TRUNCATED_NOTICE]"),
                 new AgentGateProperties.LimitProperties(60, 5000, 20),

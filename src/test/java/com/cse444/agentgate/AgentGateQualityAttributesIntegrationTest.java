@@ -34,6 +34,7 @@ import com.cse444.agentgate.shared.domain.PolicyEffect;
 import com.cse444.agentgate.shared.domain.RiskLevel;
 import com.cse444.agentgate.shared.domain.ToolType;
 import com.cse444.agentgate.shared.error.LimitExceededException;
+import com.github.dockerjava.api.DockerClient;
 import com.sun.net.httpserver.HttpServer;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -71,6 +72,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -982,6 +984,65 @@ class AgentGateQualityAttributesIntegrationTest {
 
     private List<String> mcpToolNames() {
         return mcpSyncServer.listTools().stream().map(McpSchema.Tool::name).toList();
+    }
+
+    @Test
+    @DisplayName("QA4 Real Outage: with PostgreSQL paused, LOW-risk calls keep working on cached state, MEDIUM/HIGH fail closed, audits catch up")
+    void qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed() {
+        // Warm the hot-path caches (agent, tools, limits, write cap) while the database is up
+        assertThat(gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                "lookup_order", Map.of("customerId", "cust-100"), "cust-100")).outcome()).isEqualTo("EXECUTED");
+        assertThat(gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                "issue_refund", Map.of("orderId", "ORD-QA4-WARM", "amount", 100), "cust-100")).outcome()).isEqualTo("EXECUTED");
+        assertThat(gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                "bulk_payout", Map.of("recipient", "vendor-qa4", "amount", 100), "cust-100")).outcome())
+                .isEqualTo("HELD_FOR_APPROVAL");
+
+        DockerClient docker = postgres.getDockerClient();
+        docker.pauseContainerCmd(postgres.getContainerId()).exec();
+        try {
+            awaitTrue(Duration.ofSeconds(20), () -> !policyEngineService.isPolicyStoreReachable());
+
+            long startNanos = System.nanoTime();
+            GatewayToolCallResponse lowRisk = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                    "lookup_order", Map.of("customerId", "cust-qa4-outage"), "cust-qa4-outage"));
+            long lowRiskMillis = (System.nanoTime() - startNanos) / 1_000_000;
+            System.out.printf("QA4 outage: LOW-risk call %s in %d ms from cached state%n", lowRisk.outcome(), lowRiskMillis);
+            assertThat(lowRisk.outcome()).isEqualTo("EXECUTED");
+            assertThat(lowRiskMillis).isLessThan(2_000L);
+
+            assertThatThrownBy(() -> gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                    "issue_refund", Map.of("orderId", "ORD-QA4-OUTAGE", "amount", 100), "cust-100")))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("fail closed");
+            assertThatThrownBy(() -> gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                    "bulk_payout", Map.of("recipient", "vendor-qa4-outage", "amount", 100), "cust-100")))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("fail closed");
+        } finally {
+            docker.unpauseContainerCmd(postgres.getContainerId()).exec();
+        }
+
+        awaitTrue(Duration.ofSeconds(30), policyEngineService::isPolicyStoreReachable);
+        // The call made during the outage is hash-chained once the database is back (FR7)
+        awaitTrue(Duration.ofSeconds(30), () -> !auditTrailService.searchAuditLogs(
+                "support-bot", "cust-qa4-outage", "lookup_order", "EXECUTED", null, PageRequest.of(0, 5)).isEmpty());
+        assertThat(auditTrailService.verifyChainIntegrity().intact()).isTrue();
+    }
+
+    private static void awaitTrue(Duration timeout, BooleanSupplier condition) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() - deadline < 0) {
+            try {
+                if (condition.getAsBoolean()) {
+                    return;
+                }
+            } catch (RuntimeException ignored) {
+                // the database may still be recovering
+            }
+            sleepQuietly(200);
+        }
+        throw new AssertionError("Condition not met within " + timeout);
     }
 
     private String issueAgentAccessToken(String clientId, String clientSecret) {

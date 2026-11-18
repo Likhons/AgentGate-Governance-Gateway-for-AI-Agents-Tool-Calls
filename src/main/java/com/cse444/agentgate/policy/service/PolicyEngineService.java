@@ -28,6 +28,12 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -56,6 +62,10 @@ public class PolicyEngineService {
     private final AtomicReference<PolicySnapshot> activeSnapshot =
             new AtomicReference<>(new PolicySnapshot(List.of(), Instant.now()));
     private final AtomicBoolean policyStoreReachable = new AtomicBoolean(true);
+    /** Outage drills and tests only; kept apart from the probed state so the probe cannot undo a drill. */
+    private final AtomicBoolean simulatedOutage = new AtomicBoolean(false);
+    private final AtomicBoolean probeInFlight = new AtomicBoolean(false);
+    private final ExecutorService probeExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public record CompiledPolicyRule(
             PolicyRule rule,
@@ -94,10 +104,65 @@ public class PolicyEngineService {
                     .map(r -> new CompiledPolicyRule(r, parseConditions(r.getConditionsJson())))
                     .toList();
             activeSnapshot.set(new PolicySnapshot(compiled, Instant.now()));
-            policyStoreReachable.set(true);
+            if (!policyStoreReachable.getAndSet(true)) {
+                log.info("Policy store reachable again; policy snapshot reloaded (QA4)");
+            }
         } catch (Exception ex) {
-            policyStoreReachable.set(false);
-            log.warn("Policy store unreachable during hot-reload; enforcing QA4 fail-safe rules: {}", ex.getMessage());
+            markPolicyStoreUnreachable("hot-reload failed: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * QA4: Detects a policy store (PostgreSQL) outage within seconds, independently of the 10 s policy
+     * refresh, so MEDIUM/HIGH-risk tools fail closed promptly. The probe runs on a virtual thread and is
+     * bounded by {@code agentgate.policy.store-probe-timeout}, so a hung connection also counts as an outage.
+     */
+    @Scheduled(fixedDelayString = "${agentgate.policy.store-probe-interval:2s}")
+    public void probePolicyStore() {
+        if (!probeInFlight.compareAndSet(false, true)) {
+            markPolicyStoreUnreachable("previous probe is still waiting for the database");
+            return;
+        }
+        Future<Long> probe = probeExecutor.submit(() -> {
+            try {
+                return policyRepository.count();
+            } finally {
+                probeInFlight.set(false);
+            }
+        });
+        try {
+            probe.get(properties.policy().storeProbeTimeout().toMillis(), TimeUnit.MILLISECONDS);
+            if (!policyStoreReachable.get()) {
+                refreshPolicySnapshot();
+            }
+        } catch (TimeoutException ex) {
+            markPolicyStoreUnreachable("probe timed out after " + properties.policy().storeProbeTimeout());
+        } catch (ExecutionException ex) {
+            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+            markPolicyStoreUnreachable("probe failed: " + cause.getMessage());
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * QA4: true while the policy store answers; false during an outage (or an outage drill).
+     */
+    public boolean isPolicyStoreReachable() {
+        return policyStoreReachable.get() && !simulatedOutage.get();
+    }
+
+    /**
+     * Age of the in-memory policy snapshot; LOW-risk tools stop when it exceeds the fail-safe TTL (QA4).
+     */
+    public Duration getSnapshotAge() {
+        return Duration.between(activeSnapshot.get().loadedAt(), Instant.now());
+    }
+
+    private void markPolicyStoreUnreachable(String reason) {
+        if (policyStoreReachable.getAndSet(false)) {
+            log.warn("Policy store unreachable ({}); MEDIUM/HIGH-risk tools fail closed and LOW-risk tools "
+                    + "use the last known policies for up to {} (QA4)", reason, properties.policy().lowRiskFailsafeTtl());
         }
     }
 
@@ -148,7 +213,7 @@ public class PolicyEngineService {
             Map<String, Object> arguments
     ) {
         PolicySnapshot snapshot = activeSnapshot.get();
-        boolean storeHealthy = policyStoreReachable.get();
+        boolean storeHealthy = isPolicyStoreReachable();
 
         // QA4 Fail-Safe Availability Check when the policy store is unreachable
         if (!storeHealthy) {
@@ -246,7 +311,7 @@ public class PolicyEngineService {
      * Allows tests or outage drills to simulate policy-store unreachability (QA4).
      */
     public void setSimulatedPolicyStoreReachable(boolean reachable) {
-        this.policyStoreReachable.set(reachable);
+        this.simulatedOutage.set(!reachable);
     }
 
     private PolicyEvaluationDecision evaluateAgainstRules(

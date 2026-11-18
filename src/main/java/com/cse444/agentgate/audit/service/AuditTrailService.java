@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -20,6 +21,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -27,7 +29,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
@@ -38,18 +40,21 @@ import java.util.concurrent.locks.ReentrantLock;
  * Enqueues ToolCallAuditRecordedEvent without blocking gateway latency or pinning Java 21 Virtual Threads,
  * persists sequential HMAC-SHA256 hash-chained batches in deterministic order inside TransactionTemplate,
  * and flushes pending events prior to auditor search, export, or integrity verification.
+ * When PostgreSQL is unreachable (QA4) a failed batch is put back at the head of the queue in its original
+ * order and retried with a short back-off, so calls made during the outage are still hash-chained afterwards.
  */
 @Service
 public class AuditTrailService {
 
     private static final Logger log = LoggerFactory.getLogger(AuditTrailService.class);
     private static final int MAX_BATCH_SIZE = 128;
+    private static final Duration RETRY_BACKOFF = Duration.ofSeconds(2);
 
     private final AuditLogRepository auditRepository;
     private final AuditHashChainCalculator hashCalculator;
     private final TransactionTemplate requiresNewTxTemplate;
 
-    private final ConcurrentLinkedQueue<ToolCallAuditRecordedEvent> pendingQueue = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedDeque<ToolCallAuditRecordedEvent> pendingQueue = new ConcurrentLinkedDeque<>();
     private final ExecutorService auditWriterExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "agentgate-audit-writer");
         thread.setDaemon(true);
@@ -59,6 +64,9 @@ public class AuditTrailService {
 
     private long cachedLastSequence = -1L;
     private String cachedLastHash = AuditLogEntry.GENESIS_HASH;
+    /** While the store is failing, per-event drains wait until the back-off deadline instead of hammering it. */
+    private volatile boolean storeFailing = false;
+    private volatile long retryNotBeforeNanos;
 
     public AuditTrailService(
             AuditLogRepository auditRepository,
@@ -96,25 +104,32 @@ public class AuditTrailService {
         CompletableFuture.runAsync(this::drainAllRemainingSafely, auditWriterExecutor).join();
     }
 
+    /**
+     * QA4: Retries audit events queued during a database outage even when no new calls arrive.
+     */
+    @Scheduled(fixedDelayString = "2000")
+    public void retryQueuedAudits() {
+        if (!pendingQueue.isEmpty() && !inRetryBackoff() && !auditWriterExecutor.isShutdown()) {
+            auditWriterExecutor.execute(this::drainAllRemainingSafely);
+        }
+    }
+
     @PreDestroy
     public void shutdown() {
         drainAllRemainingSafely();
+        if (!pendingQueue.isEmpty()) {
+            log.error("Shutting down with {} audit events that could not be persisted", pendingQueue.size());
+        }
         auditWriterExecutor.shutdown();
     }
 
     private void drainBatchSafely() {
-        if (pendingQueue.isEmpty()) {
+        if (pendingQueue.isEmpty() || inRetryBackoff()) {
             return;
         }
         writerLock.lock();
         try {
-            List<ToolCallAuditRecordedEvent> batch = drainUpTo(MAX_BATCH_SIZE);
-            if (!batch.isEmpty()) {
-                persistHashChainedBatch(batch);
-            }
-        } catch (Exception ex) {
-            resetTailCache();
-            log.error("Failed to persist audit batch: {}", ex.getMessage(), ex);
+            persistNextBatch();
         } finally {
             writerLock.unlock();
         }
@@ -123,18 +138,46 @@ public class AuditTrailService {
     private void drainAllRemainingSafely() {
         writerLock.lock();
         try {
-            while (!pendingQueue.isEmpty()) {
-                List<ToolCallAuditRecordedEvent> batch = drainUpTo(MAX_BATCH_SIZE);
-                if (!batch.isEmpty()) {
-                    persistHashChainedBatch(batch);
-                }
+            while (!pendingQueue.isEmpty() && persistNextBatch()) {
+                // keep draining until the queue is empty or the store fails again
             }
-        } catch (Exception ex) {
-            resetTailCache();
-            log.error("Failed to flush remaining audit entries: {}", ex.getMessage(), ex);
         } finally {
             writerLock.unlock();
         }
+    }
+
+    /**
+     * Persists the next batch. On failure the batch goes back to the head of the queue in its original
+     * order, the cached chain tail is discarded and further per-event attempts back off (FR7, QA4).
+     * Must be called while holding {@code writerLock}.
+     */
+    private boolean persistNextBatch() {
+        List<ToolCallAuditRecordedEvent> batch = drainUpTo(MAX_BATCH_SIZE);
+        if (batch.isEmpty()) {
+            return true;
+        }
+        try {
+            persistHashChainedBatch(batch);
+            if (storeFailing) {
+                storeFailing = false;
+                log.info("Audit store reachable again; resumed hash-chain writes ({} events still queued)", pendingQueue.size());
+            }
+            return true;
+        } catch (Exception ex) {
+            for (int i = batch.size() - 1; i >= 0; i--) {
+                pendingQueue.addFirst(batch.get(i));
+            }
+            resetTailCache();
+            retryNotBeforeNanos = System.nanoTime() + RETRY_BACKOFF.toNanos();
+            storeFailing = true;
+            log.warn("Audit store unavailable; keeping {} audit events in order for retry (FR7, QA4): {}",
+                    pendingQueue.size(), ex.getMessage());
+            return false;
+        }
+    }
+
+    private boolean inRetryBackoff() {
+        return storeFailing && System.nanoTime() - retryNotBeforeNanos < 0;
     }
 
     private List<ToolCallAuditRecordedEvent> drainUpTo(int max) {

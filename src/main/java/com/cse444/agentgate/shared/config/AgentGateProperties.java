@@ -41,10 +41,16 @@ public record AgentGateProperties(
             @NotBlank @Size(min = 8) String auditorPassword
     ) {}
 
+    /**
+     * @param storeProbeInterval how often the policy store (PostgreSQL) is probed for an outage (QA4)
+     * @param storeProbeTimeout  how long a probe may take before the store counts as unreachable (QA4)
+     */
     public record PolicyProperties(
             @NotNull Duration refreshInterval,
             @NotNull Duration lowRiskFailsafeTtl,
-            boolean defaultDecisionDeny
+            boolean defaultDecisionDeny,
+            @NotNull Duration storeProbeInterval,
+            @NotNull Duration storeProbeTimeout
     ) {}
 
     /**

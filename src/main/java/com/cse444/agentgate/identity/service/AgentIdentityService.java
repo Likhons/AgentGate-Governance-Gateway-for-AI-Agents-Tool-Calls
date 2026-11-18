@@ -8,8 +8,8 @@ import com.cse444.agentgate.shared.config.AgentGateProperties;
 import com.cse444.agentgate.shared.domain.AgentCallIdentity;
 import com.cse444.agentgate.shared.domain.ClearanceLevel;
 import com.cse444.agentgate.shared.event.KillSwitchActivatedEvent;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.cse444.agentgate.shared.util.FailSafeCaches;
+import com.github.benmanes.caffeine.cache.LoadingCache;
 import jakarta.persistence.EntityNotFoundException;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -23,7 +23,6 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -42,10 +41,13 @@ public class AgentIdentityService {
     private final JwtEncoder jwtEncoder;
     private final AgentGateProperties properties;
     private final ApplicationEventPublisher eventPublisher;
-    private final Cache<String, CachedAgentSnapshot> agentCache = Caffeine.newBuilder()
-            .maximumSize(2000)
-            .expireAfterWrite(Duration.ofSeconds(10))
-            .build();
+
+    /**
+     * Last-known-good agent state (QA4): refreshed in the background every policy refresh interval and
+     * served from cache while PostgreSQL is unreachable, for at most the low-risk fail-safe TTL.
+     * Kill switches on this instance invalidate the entry immediately (FR8).
+     */
+    private final LoadingCache<String, CachedAgentSnapshot> agentCache;
 
     public AgentIdentityService(
             AgentClientRepository agentRepository,
@@ -59,6 +61,15 @@ public class AgentIdentityService {
         this.jwtEncoder = jwtEncoder;
         this.properties = properties;
         this.eventPublisher = eventPublisher;
+        this.agentCache = FailSafeCaches.lastKnownGood(
+                2000,
+                properties.policy().refreshInterval(),
+                properties.policy().lowRiskFailsafeTtl(),
+                clientId -> agentRepository.findByClientId(clientId)
+                        .map(found -> new CachedAgentSnapshot(
+                                found.getClientId(), found.isEnabled(), found.getClearanceLevel()))
+                        .orElse(null)
+        );
     }
 
     @Transactional
@@ -128,7 +139,9 @@ public class AgentIdentityService {
         );
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * Not transactional on purpose: the cached path must not need a database connection (QA4).
+     */
     public AgentCallIdentity verifyAndResolveAgentIdentity(String clientId, String delegatedUserId) {
         CachedAgentSnapshot agent = getCachedSnapshot(clientId);
         if (agent == null) {
@@ -140,7 +153,6 @@ public class AgentIdentityService {
         return new AgentCallIdentity(agent.clientId(), delegatedUserId, agent.clearanceLevel());
     }
 
-    @Transactional(readOnly = true)
     public boolean isAgentEnabled(String clientId) {
         CachedAgentSnapshot agent = getCachedSnapshot(clientId);
         return agent != null && agent.enabled();
@@ -150,18 +162,7 @@ public class AgentIdentityService {
         if (clientId == null || clientId.isBlank()) {
             return null;
         }
-        CachedAgentSnapshot cached = agentCache.getIfPresent(clientId);
-        if (cached != null) {
-            return cached;
-        }
-        return agentRepository.findByClientId(clientId)
-                .map(found -> {
-                    CachedAgentSnapshot snapshot = new CachedAgentSnapshot(
-                            found.getClientId(), found.isEnabled(), found.getClearanceLevel());
-                    agentCache.put(clientId, snapshot);
-                    return snapshot;
-                })
-                .orElse(null);
+        return agentCache.get(clientId);
     }
 
     @Transactional(readOnly = true)

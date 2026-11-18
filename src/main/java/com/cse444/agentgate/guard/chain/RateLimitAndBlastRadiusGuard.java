@@ -7,8 +7,8 @@ import com.cse444.agentgate.shared.config.AgentGateProperties;
 import com.cse444.agentgate.shared.error.LimitExceededException;
 import com.cse444.agentgate.shared.event.LimitBreachAlertEvent;
 import com.cse444.agentgate.shared.event.LimitBreachAlertEvent.BreachType;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.cse444.agentgate.shared.util.FailSafeCaches;
+import com.github.benmanes.caffeine.cache.LoadingCache;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -40,6 +40,8 @@ public class RateLimitAndBlastRadiusGuard implements InputCallGuard {
 
     private record EffectiveLimits(int requestsPerMinute, int dailyQuota, int writeBlastRadiusPerHour) {}
 
+    private record AgentToolKey(String agentId, String toolName) {}
+
     private final AgentToolLimitRepository limitRepository;
     private final AgentGateProperties properties;
     private final StringRedisTemplate redisTemplate;
@@ -49,14 +51,9 @@ public class RateLimitAndBlastRadiusGuard implements InputCallGuard {
     private final Map<String, Bucket> minuteBuckets = new ConcurrentHashMap<>();
     private final Map<String, Bucket> dailyQuotaBuckets = new ConcurrentHashMap<>();
     private final Map<String, Bucket> writeBlastRadiusBuckets = new ConcurrentHashMap<>();
-    private final Cache<String, EffectiveLimits> limitCache = Caffeine.newBuilder()
-            .maximumSize(5000)
-            .expireAfterWrite(Duration.ofSeconds(10))
-            .build();
-    private final Cache<String, Integer> agentWriteCapCache = Caffeine.newBuilder()
-            .maximumSize(2000)
-            .expireAfterWrite(Duration.ofSeconds(10))
-            .build();
+    /** Last-known-good limit overrides (QA4): served from cache while PostgreSQL is unreachable. */
+    private final LoadingCache<AgentToolKey, EffectiveLimits> limitCache;
+    private final LoadingCache<AgentToolKey, Integer> agentWriteCapCache;
 
     public RateLimitAndBlastRadiusGuard(
             AgentToolLimitRepository limitRepository,
@@ -70,6 +67,10 @@ public class RateLimitAndBlastRadiusGuard implements InputCallGuard {
         this.redisTemplate = redisTemplate;
         this.eventPublisher = eventPublisher;
         this.meterRegistry = meterRegistry;
+        Duration refreshAfter = properties.policy().refreshInterval();
+        Duration maxStaleness = properties.policy().lowRiskFailsafeTtl();
+        this.limitCache = FailSafeCaches.lastKnownGood(5000, refreshAfter, maxStaleness, this::loadLimits);
+        this.agentWriteCapCache = FailSafeCaches.lastKnownGood(2000, refreshAfter, maxStaleness, this::loadWriteCap);
     }
 
     @Override
@@ -142,32 +143,34 @@ public class RateLimitAndBlastRadiusGuard implements InputCallGuard {
     }
 
     private int resolveAgentWriteBlastCap(String agentId, String toolName) {
-        String key = agentId + ":" + toolName;
-        return agentWriteCapCache.get(key, k ->
-                limitRepository.findByAgentClientIdAndToolName(agentId, toolName)
-                        .map(AgentToolLimitConfig::getWriteBlastRadiusPerHour)
-                        .orElseGet(() -> limitRepository.findAllByAgentClientId(agentId).stream()
-                                .mapToInt(AgentToolLimitConfig::getWriteBlastRadiusPerHour)
-                                .max()
-                                .orElse(properties.limits().defaultWriteBlastRadiusPerHour()))
-        );
+        return agentWriteCapCache.get(new AgentToolKey(agentId, toolName));
     }
 
     private EffectiveLimits resolveLimits(String agentId, String toolName) {
-        String key = agentId + ":" + toolName;
-        return limitCache.get(key, k ->
-                limitRepository.findByAgentClientIdAndToolName(agentId, toolName)
-                        .map(cfg -> new EffectiveLimits(
-                                cfg.getRequestsPerMinute(),
-                                cfg.getDailyQuota(),
-                                cfg.getWriteBlastRadiusPerHour()
-                        ))
-                        .orElseGet(() -> new EffectiveLimits(
-                                properties.limits().defaultRequestsPerMinute(),
-                                properties.limits().defaultDailyQuota(),
-                                properties.limits().defaultWriteBlastRadiusPerHour()
-                        ))
-        );
+        return limitCache.get(new AgentToolKey(agentId, toolName));
+    }
+
+    private Integer loadWriteCap(AgentToolKey key) {
+        return limitRepository.findByAgentClientIdAndToolName(key.agentId(), key.toolName())
+                .map(AgentToolLimitConfig::getWriteBlastRadiusPerHour)
+                .orElseGet(() -> limitRepository.findAllByAgentClientId(key.agentId()).stream()
+                        .mapToInt(AgentToolLimitConfig::getWriteBlastRadiusPerHour)
+                        .max()
+                        .orElse(properties.limits().defaultWriteBlastRadiusPerHour()));
+    }
+
+    private EffectiveLimits loadLimits(AgentToolKey key) {
+        return limitRepository.findByAgentClientIdAndToolName(key.agentId(), key.toolName())
+                .map(cfg -> new EffectiveLimits(
+                        cfg.getRequestsPerMinute(),
+                        cfg.getDailyQuota(),
+                        cfg.getWriteBlastRadiusPerHour()
+                ))
+                .orElseGet(() -> new EffectiveLimits(
+                        properties.limits().defaultRequestsPerMinute(),
+                        properties.limits().defaultDailyQuota(),
+                        properties.limits().defaultWriteBlastRadiusPerHour()
+                ));
     }
 
     private boolean tryIncrementRedisWindow(String redisKey, int maxAllowed, Duration ttl) {
