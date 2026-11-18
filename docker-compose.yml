@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-agentgate}
       POSTGRES_USER: ${POSTGRES_USER:-agentgate}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentgate_dev_secret}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example)}
     ports:
       - "5432:5432"
     volumes:
@@ -53,17 +53,19 @@ services:
       SPRING_PROFILES_ACTIVE: docker
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-agentgate}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agentgate}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-agentgate_dev_secret}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example)}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
-      AGENTGATE_SECURITY_JWT_SECRET: ${AGENTGATE_SECURITY_JWT_SECRET:-replace-with-256-bit-hmac-key-via-env-file}
-      AGENTGATE_AUDIT_HMAC_SECRET: ${AGENTGATE_AUDIT_HMAC_SECRET:-replace-with-audit-chain-hmac-secret-via-env}
+      # Secrets are required (no defaults in the repository, C2): docker compose stops with the
+      # message below when one is missing. Copy .env.example to .env and set your own values.
+      AGENTGATE_SECURITY_JWT_SECRET: ${AGENTGATE_SECURITY_JWT_SECRET:?Set AGENTGATE_SECURITY_JWT_SECRET (32+ chars) in .env}
+      AGENTGATE_AUDIT_HMAC_SECRET: ${AGENTGATE_AUDIT_HMAC_SECRET:?Set AGENTGATE_AUDIT_HMAC_SECRET (32+ chars) in .env}
       AGENTGATE_ADMIN_USERNAME: ${AGENTGATE_ADMIN_USERNAME:-user}
-      AGENTGATE_ADMIN_PASSWORD: ${AGENTGATE_ADMIN_PASSWORD:-password}
+      AGENTGATE_ADMIN_PASSWORD: ${AGENTGATE_ADMIN_PASSWORD:?Set AGENTGATE_ADMIN_PASSWORD in .env}
       AGENTGATE_APPROVER_USERNAME: ${AGENTGATE_APPROVER_USERNAME:-approver}
-      AGENTGATE_APPROVER_PASSWORD: ${AGENTGATE_APPROVER_PASSWORD:-approver-dev-pass}
+      AGENTGATE_APPROVER_PASSWORD: ${AGENTGATE_APPROVER_PASSWORD:?Set AGENTGATE_APPROVER_PASSWORD in .env}
       AGENTGATE_AUDITOR_USERNAME: ${AGENTGATE_AUDITOR_USERNAME:-auditor}
-      AGENTGATE_AUDITOR_PASSWORD: ${AGENTGATE_AUDITOR_PASSWORD:-auditor-dev-pass}
+      AGENTGATE_AUDITOR_PASSWORD: ${AGENTGATE_AUDITOR_PASSWORD:?Set AGENTGATE_AUDITOR_PASSWORD in .env}
       # Optional fallback approver webhook for high-risk tools without their own approvalWebhookUrl (FR4)
       AGENTGATE_APPROVAL_WEBHOOK_URL: ${AGENTGATE_APPROVAL_WEBHOOK_URL:-}
     ports:

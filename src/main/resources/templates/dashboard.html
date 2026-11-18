@@ -34,7 +34,7 @@
             <a class="nav-link" href="/actuator/prometheus" target="_blank">Prometheus</a>
             <div class="auth-bar" id="auth-controls">
                 <input id="op-user" class="auth-input" type="text" value="user" aria-label="Operator Username" placeholder="user">
-                <input id="op-pass" class="auth-input" type="password" value="password" aria-label="Operator Password" placeholder="password">
+                <input id="op-pass" class="auth-input" type="password" aria-label="Operator Password" placeholder="password from .env">
                 <button id="unlock-btn" class="btn btn-primary btn-sm" type="button" onclick="AgentGateUI.unlockOperator()">Unlock Console</button>
             </div>
         </div>
@@ -201,7 +201,7 @@
     <section id="panel-registry" class="panel">
         <div class="stack">
             <div id="registry-lock-notice" class="lock-banner">
-                Unlock the Operator Console in the top-right bar (default: <span class="mono">user / password</span>) to inspect registered tools, circuit breakers, kill switches, and active policies.
+                Unlock the Operator Console in the top-right bar (the <span class="mono">AGENTGATE_ADMIN_*</span> credentials from your <span class="mono">.env</span>) to inspect registered tools, circuit breakers, kill switches, and active policies.
             </div>
 
             <div id="registry-content" style="display:none;" class="stack">
@@ -287,7 +287,7 @@
     <!-- TAB 3: Human Approvals -->
     <section id="panel-approvals" class="panel">
         <div id="approvals-lock-notice" class="lock-banner">
-            Unlock the Operator Console (<span class="mono">user / password</span> or <span class="mono">approver / approver-dev-pass</span>) to review and decide paused high-risk tool calls.
+            Unlock the Operator Console (<span class="mono">AGENTGATE_ADMIN_*</span> or <span class="mono">AGENTGATE_APPROVER_*</span> credentials from <span class="mono">.env</span>) to review and decide paused high-risk tool calls.
         </div>
 
         <div id="approvals-content" style="display:none;" class="card">
@@ -323,7 +323,7 @@
     <!-- TAB 4: Audit Chain -->
     <section id="panel-audit" class="panel">
         <div id="audit-lock-notice" class="lock-banner">
-            Unlock the Operator Console (<span class="mono">user / password</span> or <span class="mono">auditor / auditor-dev-pass</span>) to search and cryptographically verify the HMAC-SHA256 audit log.
+            Unlock the Operator Console (<span class="mono">AGENTGATE_ADMIN_*</span> or <span class="mono">AGENTGATE_AUDITOR_*</span> credentials from <span class="mono">.env</span>) to search and cryptographically verify the HMAC-SHA256 audit log.
         </div>
 
         <div id="audit-content" style="display:none;" class="card">

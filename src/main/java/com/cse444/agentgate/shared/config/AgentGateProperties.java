@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -12,6 +13,9 @@ import java.time.Duration;
 
 /**
  * Typed, validated configuration properties for AgentGate (Requirement C2).
+ * Secrets have no defaults in the repository: they come from environment variables
+ * (Docker Compose / CI) or a git-ignored {@code .env} file, and startup fails fast when
+ * a secret is missing or too short to be a safe HMAC key.
  */
 @Validated
 @ConfigurationProperties(prefix = "agentgate")
@@ -26,14 +30,15 @@ public record AgentGateProperties(
 ) {
 
     public record SecurityProperties(
-            @NotBlank String jwtSecret,
+            @NotBlank @Size(min = 32, message = "must be at least 32 characters (256-bit HMAC-SHA256 key)")
+            String jwtSecret,
             @NotNull Duration accessTokenTtl,
             @NotBlank String adminUsername,
-            @NotBlank String adminPassword,
+            @NotBlank @Size(min = 8) String adminPassword,
             @NotBlank String approverUsername,
-            @NotBlank String approverPassword,
+            @NotBlank @Size(min = 8) String approverPassword,
             @NotBlank String auditorUsername,
-            @NotBlank String auditorPassword
+            @NotBlank @Size(min = 8) String auditorPassword
     ) {}
 
     public record PolicyProperties(
@@ -65,7 +70,8 @@ public record AgentGateProperties(
     ) {}
 
     public record AuditProperties(
-            @NotBlank String hmacSecret
+            @NotBlank @Size(min = 32, message = "must be at least 32 characters (256-bit HMAC-SHA256 key)")
+            String hmacSecret
     ) {}
 
     /**

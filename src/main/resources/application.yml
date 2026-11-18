@@ -1,6 +1,17 @@
+# ----------------------------------------------------------------------------
+# Base configuration shared by every profile (Requirement C2).
+# Secrets have NO defaults here: they come from environment variables (Docker
+# Compose, CI) or from a git-ignored .env file in the working directory, which
+# is imported below for local runs. Copy .env.example to .env to get started.
+# Profiles: dev (default for local runs), docker (docker compose), test (JUnit).
+# ----------------------------------------------------------------------------
 spring:
   application:
     name: agentgate
+  config:
+    import: "optional:file:.env[.properties]"
+  profiles:
+    default: dev
   threads:
     virtual:
       enabled: true
@@ -13,9 +24,9 @@ spring:
     problemdetails:
       enabled: true
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/agentgate}
-    username: ${SPRING_DATASOURCE_USERNAME:agentgate}
-    password: ${SPRING_DATASOURCE_PASSWORD:agentgate_dev_secret}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/${POSTGRES_DB:agentgate}}
+    username: ${SPRING_DATASOURCE_USERNAME:${POSTGRES_USER:agentgate}}
+    password: ${SPRING_DATASOURCE_PASSWORD:${POSTGRES_PASSWORD}}
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
@@ -63,14 +74,14 @@ springdoc:
 
 agentgate:
   security:
-    jwt-secret: ${AGENTGATE_SECURITY_JWT_SECRET:agentgate-default-dev-hmac-sha256-secret-key-minimum-32-bytes}
+    jwt-secret: ${AGENTGATE_SECURITY_JWT_SECRET}
     access-token-ttl: 1h
     admin-username: ${AGENTGATE_ADMIN_USERNAME:user}
-    admin-password: ${AGENTGATE_ADMIN_PASSWORD:password}
+    admin-password: ${AGENTGATE_ADMIN_PASSWORD}
     approver-username: ${AGENTGATE_APPROVER_USERNAME:approver}
-    approver-password: ${AGENTGATE_APPROVER_PASSWORD:approver-dev-pass}
+    approver-password: ${AGENTGATE_APPROVER_PASSWORD}
     auditor-username: ${AGENTGATE_AUDITOR_USERNAME:auditor}
-    auditor-password: ${AGENTGATE_AUDITOR_PASSWORD:auditor-dev-pass}
+    auditor-password: ${AGENTGATE_AUDITOR_PASSWORD}
   policy:
     refresh-interval: 10s
     low-risk-failsafe-ttl: 5m
@@ -88,7 +99,7 @@ agentgate:
     default-daily-quota: 5000
     default-write-blast-radius-per-hour: 20
   audit:
-    hmac-secret: ${AGENTGATE_AUDIT_HMAC_SECRET:dev-only-override-in-env-audit-hmac-key}
+    hmac-secret: ${AGENTGATE_AUDIT_HMAC_SECRET}
   mcp:
     # How often the live MCP tool list is reconciled with the registry (FR1, FR10)
     tool-sync-interval: 5s

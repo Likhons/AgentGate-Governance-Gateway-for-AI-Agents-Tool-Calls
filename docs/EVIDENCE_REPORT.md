@@ -8,7 +8,7 @@
 
 | Requirement / Attribute | Verification Method | Target SLA | Measured Result | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **C5 & C6: Automated Unit, Slice, ArchUnit & Integration Suite** | `./gradlew --no-daemon test` (Testcontainers PostgreSQL 16 + Redis 7.4) | 100% tests passing, 0 cyclic Modulith deps | **25 / 25 tests passed** (`0` failed, `0` skipped; `ArchitectureRulesTest` `6/6` in `10.565s`, `AgentGateQualityAttributesIntegrationTest` `9/9` in `7.054s`) | PASS |
+| **C5 & C6: Automated Unit, Slice, ArchUnit & Integration Suite** | `./gradlew --no-daemon test` (Testcontainers PostgreSQL 16 + Redis 7.4) | 100% tests passing, 0 cyclic Modulith deps | **31 / 31 tests passed** on 2026-11-18 (`0` failed, `0` skipped; `ArchitectureRulesTest` `6/6` in `31.746s`, `AgentGateQualityAttributesIntegrationTest` `13/13` in `8.868s`) | PASS |
 | **QA1: Security & Injection Defense** | Live Docker `grafana/k6` (`load-tests/qa1_security_suite.k6.js`) + JUnit IT | `100%` malicious blocked; `>= 95%` legitimate pass | **`100.00%` (30 / 30)** malicious blocked/held; **`100.00%` (200 / 200)** legitimate passed | PASS |
 | **QA2: Gateway Latency @ 100 RPS** | Live Docker `grafana/k6` (`load-tests/qa2_gateway_latency.k6.js`, `60s`) | Overhead `p(95) < 30ms`; End-to-End `p(95) < 40ms`; `>= 95%` pass | Gateway overhead **`p(95) = 5 ms`** (`avg = 3.01 ms`, `med = 1 ms`); HTTP `p(95) = 17.29 ms` (`avg = 12.57 ms`); **`100.00%` (5,977 / 5,977)** pass | PASS |
 | **QA3: Hash-Chained Audit Trail & Tamper Detection** | Live `GET /api/v1/audit/verify` + Testcontainers `qa3AuditTrailDetectsTampering` | Tamper detected `< 1 min`; zero broken chain links | **`6,207 / 6,207`** live entries verified **`intact: true`**; SQL row edit pinpoints `firstTamperedEntryId` | PASS |
@@ -18,18 +18,21 @@
 
 ---
 
-## 2. Automated Gradle Test Suite Results (Post-Optimization)
+## 2. Automated Gradle Test Suite Results (Latest Run: 2026-11-18, after AI-Usage Log Cases 11–14)
 
-Executed with OpenJDK 21 (`--no-daemon test`) against Testcontainers **PostgreSQL 16** and **Redis 7.4**:
+Executed with JDK 21 (`--no-daemon test`) against Testcontainers **PostgreSQL 16** and **Redis 7.4**:
 
 | Test Suite | Tests | Failures | Errors | Skipped | Duration |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `com.cse444.agentgate.ArchitectureRulesTest` | 6 | 0 | 0 | 0 | 10.565 s |
-| `com.cse444.agentgate.AgentGateQualityAttributesIntegrationTest` | 9 | 0 | 0 | 0 | 7.054 s |
-| `com.cse444.agentgate.WebSecurityAndProblemDetailsSliceTest` | 4 | 0 | 0 | 0 | 0.493 s |
-| `com.cse444.agentgate.GuardAndStatePatternUnitTest` | 4 | 0 | 0 | 0 | 0.029 s |
+| `com.cse444.agentgate.ArchitectureRulesTest` | 6 | 0 | 0 | 0 | 31.746 s |
+| `com.cse444.agentgate.AgentGateQualityAttributesIntegrationTest` | 13 | 0 | 0 | 0 | 8.868 s |
+| `com.cse444.agentgate.WebSecurityAndProblemDetailsSliceTest` | 6 | 0 | 0 | 0 | 1.437 s |
+| `com.cse444.agentgate.GuardAndStatePatternUnitTest` | 4 | 0 | 0 | 0 | 0.039 s |
 | `com.cse444.agentgate.PolicyAndConditionUnitTest` | 2 | 0 | 0 | 0 | 0.005 s |
-| **Total** | **25** | **0** | **0** | **0** | **18.146 s** |
+| **Total** | **31** | **0** | **0** | **0** | **42.095 s** |
+
+Each of the four fix commits for Cases 11–14 passed the full suite on its own (29 → 30 → 31 → 31 tests).
+*Previous run (post-QA2 optimization, before Cases 11–14):* 25 / 25 passed in 18.146 s (integration suite 9 tests).
 
 Covered integration test scenarios in [AgentGateQualityAttributesIntegrationTest.java](../src/test/java/com/cse444/agentgate/AgentGateQualityAttributesIntegrationTest.java):
 - `qa1RedTeamSuiteIs100PercentBlockedOrHeldForApproval`
@@ -41,6 +44,10 @@ Covered integration test scenarios in [AgentGateQualityAttributesIntegrationTest
 - `qa3AuditTrailDetectsTampering`
 - `qa4FailSafeAvailabilityUnderPolicyStoreOutage`
 - `qa5OpenApiImportAndFr8KillSwitchCancelsPendingApprovals`
+- `fr4AgentPollsFinalApprovalResult` *(Case 11: agent-scoped result endpoint with an explicit terminal status)*
+- `fr4ApprovedCallWithFailingDownstreamReportsExecutionFailed` *(Case 11: `EXECUTION_FAILED` instead of a stuck `PENDING`)*
+- `fr4ApproverWebhooksUseToolConfiguredUrlWithRedactedArguments` *(Case 12: admin-configured, PII-redacted approver webhooks)*
+- `fr1McpServerToolListFollowsRegistryAtRuntime` *(Case 13: live MCP tool list follows the registry and kill switches)*
 
 ---
 

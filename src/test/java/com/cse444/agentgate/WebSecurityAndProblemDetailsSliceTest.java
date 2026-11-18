@@ -34,6 +34,7 @@ import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -69,6 +70,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         GlobalProblemDetailsHandler.class
 })
 @EnableConfigurationProperties(AgentGateProperties.class)
+@ActiveProfiles("test")
 class WebSecurityAndProblemDetailsSliceTest {
 
     @Autowired
@@ -177,7 +179,7 @@ class WebSecurityAndProblemDetailsSliceTest {
 
         // 4. Admin Basic Auth can hit /api/v1/policies/reload
         mockMvc.perform(post("/api/v1/policies/reload")
-                        .with(httpBasic("user", "password")))
+                        .with(httpBasic("user", "test-admin-pass")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("RELOADED"));
     }

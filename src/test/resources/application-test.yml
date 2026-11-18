@@ -1,0 +1,22 @@
+# ----------------------------------------------------------------------------
+# test profile: JUnit slice and Testcontainers integration tests (C5).
+# Throw-away values used only inside the test JVM. The datasource and Redis
+# connections are replaced by Testcontainers @ServiceConnection details.
+# ----------------------------------------------------------------------------
+spring:
+  datasource:
+    password: testcontainers-provides-the-real-password
+
+agentgate:
+  security:
+    jwt-secret: test-only-jwt-hmac-sha256-signing-key-not-a-secret
+    admin-username: user
+    admin-password: test-admin-pass
+    approver-username: approver
+    approver-password: test-approver-pass
+    auditor-username: auditor
+    auditor-password: test-auditor-pass
+  audit:
+    hmac-secret: test-only-audit-chain-hmac-key-not-a-secret
+  approval:
+    default-webhook-url: ""

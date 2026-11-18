@@ -156,13 +156,11 @@ public class SecurityConfig {
                 .build();
     }
 
+    /**
+     * AgentGateProperties validates the secret to at least 32 characters (>= 256 bits),
+     * so the key is used as-is instead of being zero-padded into a weak key.
+     */
     private SecretKey buildHmacSecretKey(String rawSecret) {
-        byte[] keyBytes = rawSecret.getBytes(StandardCharsets.UTF_8);
-        if (keyBytes.length < 32) {
-            byte[] padded = new byte[32];
-            System.arraycopy(keyBytes, 0, padded, 0, keyBytes.length);
-            keyBytes = padded;
-        }
-        return new SecretKeySpec(keyBytes, "HmacSHA256");
+        return new SecretKeySpec(rawSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
     }
 }

@@ -4,14 +4,23 @@
 
 ### Step 1: Start the Full Stack (< 8 GB RAM)
 ```bash
-cp .env.example .env
-docker compose up -d
+cp .env.example .env          # then replace every change_me value (secrets have no defaults, C2)
+docker compose up -d          # compose stops with a clear message if a required secret is missing
+
+# Load the same values into your shell for the curl commands below
+set -a; . ./.env; set +a
+ADMIN="$AGENTGATE_ADMIN_USERNAME:$AGENTGATE_ADMIN_PASSWORD"
 ```
+> Postgres keeps the password from its first start inside the `postgres_data` volume. If you change
+> `POSTGRES_PASSWORD` later, run `docker compose down -v` once (this deletes local data).
+>
+> Local run without Docker for the app: `docker compose up -d postgres redis && ./gradlew bootRun`
+> (the default `dev` profile reads `.env` from the project root).
 
 ### Step 2: Import Your REST Service from an OpenAPI Spec (FR1)
 ```bash
 curl -X POST http://localhost:8080/api/v1/tools/import-openapi \
-  -u user:password \
+  -u "$ADMIN" \
   -H "Content-Type: application/json" \
   -d '{
     "owningTeam": "PaymentsTeam",
@@ -30,7 +39,7 @@ curl -X POST http://localhost:8080/api/v1/tools/import-openapi \
 ### Step 3: Register Your AI Agent as an OAuth2 Client (FR2)
 ```bash
 curl -X POST http://localhost:8080/api/v1/agents \
-  -u user:password \
+  -u "$ADMIN" \
   -H "Content-Type: application/json" \
   -d '{
     "clientId": "support-bot",
@@ -45,7 +54,7 @@ curl -X POST http://localhost:8080/api/v1/agents \
 ### Step 4: Attach a Versioned Policy Rule (Hot-Reloads Within 10 Seconds — FR3)
 ```bash
 curl -X POST http://localhost:8080/api/v1/policies \
-  -u user:password \
+  -u "$ADMIN" \
   -H "Content-Type: application/json" \
   -d '{
     "ruleName": "allow-refund-under-2000-bdt",
@@ -84,7 +93,7 @@ curl -X POST http://localhost:8080/api/v1/gateway/call \
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/gateway/approvals/<approvalId>
 
 # 4. Verify Hash-Chained Audit Trail Integrity (FR7, QA3)
-curl -u user:password http://localhost:8080/api/v1/audit/verify
+curl -u "$ADMIN" http://localhost:8080/api/v1/audit/verify
 ```
 
 New and edited tools appear on the MCP endpoint within `agentgate.mcp.tool-sync-interval` (5 s)
@@ -146,3 +155,6 @@ without a restart; a tool kill switch withdraws the tool immediately (FR1, FR8, 
 13. **Case 13 — MCP Tool List Frozen at Startup (`FR1`, `FR8`, `FR10`, `QA5`):**
     - *Issue Found:* Spring AI reads `ToolCallbackProvider` beans once at startup, so tools registered or imported later never appeared on the MCP endpoint and killed or circuit-open tools stayed listed until a restart; only the custom REST `/mcp/tools` view was live.
     - *Fix Applied:* Replaced the startup-only provider with `McpToolListSynchronizer`, which reconciles the live `McpSyncServer` (`addTool`/`removeTool`, which emit `notifications/tools/list_changed`) every `agentgate.mcp.tool-sync-interval` and immediately on tool/write kill switches. Covered by `fr1McpServerToolListFollowsRegistryAtRuntime`.
+14. **Case 14 — Default Secrets in the Repository and Missing Profiles (`C2`):**
+    - *Issue Found:* `application.yml` and `docker-compose.yml` shipped working fallback secrets (admin password `password`, dev JWT/HMAC keys), `SPRING_PROFILES_ACTIVE=docker` referred to a profile that had no configuration, and `SecurityConfig` silently zero-padded short JWT keys.
+    - *Fix Applied:* Removed every secret default; added `dev` (default), `docker` and `test` profiles; the base config imports the git-ignored `.env`; `AgentGateProperties` validates secret length (`@Size(min = 32)` for HMAC keys, `min = 8` for passwords); Compose uses `${VAR:?message}` for required secrets; k6 scripts and the dashboard no longer embed `user/password`.

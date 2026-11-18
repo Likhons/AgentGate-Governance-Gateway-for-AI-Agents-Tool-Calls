@@ -255,7 +255,7 @@ const AgentGateUI = (() => {
         const header = 'Basic ' + btoa(`${u}:${p}`);
         const probe = await apiFetch('/api/v1/audit/verify', { headers: { Authorization: header } });
         if (!probe.ok && probe.status === 401) {
-            if (!silent) showToast('Invalid credentials (try user / password)');
+            if (!silent) showToast('Invalid credentials (use the AGENTGATE_ADMIN_* values from .env)');
             return;
         }
         sessionStorage.setItem(STORAGE_KEY, header);

@@ -26,10 +26,18 @@
   - Initialized `git` on `main` and pushed incremental commits to `origin/main` with `.env`/key ignores.
   - Executed live Docker Compose benchmark (`postgres`, `redis`, `agentgate`, `mock-downstream`), diagnosed & resolved QA2 `59.88 s` HikariCP/audit/ZGC bottleneck, re-ran both `qa2_gateway_latency.k6.js` (**`5 ms` p95 overhead, `17.29 ms` p95 HTTP, `5,977/5,977` `100.00%` pass**) and `qa1_security_suite.k6.js` (**`30/30` malicious blocked, `200/200` legitimate pass**), verified `6,207` hash-chained audit entries (`intact: true`) + OpenAPI import (`qa5_get_order`) + `docker stats` (`712.3 MiB` post-load), and authored [EVIDENCE_REPORT.md](file:///e:/Assignment/docs/EVIDENCE_REPORT.md).
 
+- **Step 9 — Review Fixes for FR4, FR1/FR10 and C2 (2026-11-18, AI-Usage Log Cases 11–14, branch `fix/review-fr4-mcp-c2`):**
+  - FR4: agent polls its own result at `GET /api/v1/gateway/approvals/{approvalId}` (`statusUrl` in the held payload, `resultStatus` + `terminal`); a downstream failure after approval ends as `EXECUTION_FAILED` (`execution_status`, `V7`).
+  - FR4 security: the approver webhook URL is admin-configured per tool (`approvalWebhookUrl`, `V8`) or `AGENTGATE_APPROVAL_WEBHOOK_URL`, never taken from the agent request; redacted arguments, timeout applied, sent after commit, plus `approval.resolved`.
+  - FR1/FR10: `McpToolListSynchronizer` keeps the live MCP server tool list in step with the registry (5 s, and immediately on a kill switch).
+  - C2: no secret defaults, `dev`/`docker`/`test` profiles, `.env` import, secret length validation, Compose `${VAR:?}`.
+  - One commit per fix; every commit passes the full suite on JDK 21 + Testcontainers PostgreSQL 16 / Redis 7.4 (29 → 30 → 31 → 31 tests).
+  - Not yet re-verified after Step 9: `docker compose up` with a real `.env` (docker profile, `V7`/`V8` on the existing volume) and the k6 QA1/QA2 runs (they now need `-e ADMIN_PASS=...`).
+
 ## 2. Current State of the Application
-- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **25/25 passing** (`0` failures, `0` skipped).
+- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **31/31 passing** (`0` failures, `0` skipped) as of 2026-11-18.
 - Live Docker Compose + `grafana/k6` benchmark suite passes **QA1 (`100%`)**, **QA2 (`p(95) = 5 ms` overhead @ 100 RPS)**, **QA3 (`6,207/6,207` intact)**, **QA4 (Testcontainers verified)**, **QA5 (live OpenAPI import verified)**, and **C1 (`712.3 MiB` total stack RAM < `8 GB`)**.
-- All evidence, ADRs, AI-Usage Log entries (Cases 1–10), and optimization fixes are documented and committed cleanly on `main`.
+- All evidence, ADRs, AI-Usage Log entries (Cases 1–14), and fixes are documented and committed.
 
 ## 3. Immediate Next Steps for Next Session (TODOs)
 1. **Mid-Project Checkpoint Change Request (Requirement C10):** When the instructor issues the checkpoint change request, implement it as a new pluggable bean/module with zero edits to core orchestrators, and log touched files.

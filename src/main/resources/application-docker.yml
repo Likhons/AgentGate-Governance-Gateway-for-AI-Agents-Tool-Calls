@@ -1,0 +1,21 @@
+# ----------------------------------------------------------------------------
+# docker profile: the containerised stack started by `docker compose up`.
+# Connection settings and every secret are injected by docker-compose.yml from
+# the .env file; compose refuses to start when a required secret is missing.
+# ----------------------------------------------------------------------------
+server:
+  shutdown: graceful
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+management:
+  endpoint:
+    health:
+      show-details: when_authorized
+
+logging:
+  level:
+    root: INFO
+    com.cse444.agentgate: INFO

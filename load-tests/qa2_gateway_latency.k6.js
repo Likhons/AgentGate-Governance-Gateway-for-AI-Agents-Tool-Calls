@@ -9,7 +9,7 @@ import { Trend, Rate } from 'k6/metrics';
  * excluding human approval waits (QA2).
  *
  * Run command:
- *   k6 run load-tests/qa2_gateway_latency.k6.js
+ *   k6 run -e ADMIN_PASS=<AGENTGATE_ADMIN_PASSWORD> load-tests/qa2_gateway_latency.k6.js
  */
 const gatewayOverheadTrend = new Trend('agentgate_gateway_overhead_ms', true);
 const legitimatePassRate = new Rate('qa1_legitimate_pass_rate');
@@ -36,7 +36,12 @@ export const options = {
 
 const BASE_URL = __ENV.AGENTGATE_URL || 'http://localhost:8080';
 const DOWNSTREAM_URL = __ENV.DOWNSTREAM_URL || 'http://mock-downstream:8081';
-const ADMIN_AUTH = encoding.b64encode(`${__ENV.ADMIN_USER || 'user'}:${__ENV.ADMIN_PASS || 'password'}`);
+// Admin credentials come from the environment (same values as AGENTGATE_ADMIN_* in .env, C2):
+//   k6 run -e ADMIN_USER=user -e ADMIN_PASS=<AGENTGATE_ADMIN_PASSWORD> <script>
+if (!__ENV.ADMIN_PASS) {
+    throw new Error('Set ADMIN_PASS (the AGENTGATE_ADMIN_PASSWORD from .env), e.g. k6 run -e ADMIN_PASS=... <script>');
+}
+const ADMIN_AUTH = encoding.b64encode(`${__ENV.ADMIN_USER || 'user'}:${__ENV.ADMIN_PASS}`);
 
 export function setup() {
     const adminHeaders = {

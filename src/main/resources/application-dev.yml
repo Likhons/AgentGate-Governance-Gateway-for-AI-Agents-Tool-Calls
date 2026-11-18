@@ -1,0 +1,13 @@
+# ----------------------------------------------------------------------------
+# dev profile: local runs (`./gradlew bootRun`), active when no profile is set.
+# Start postgres + redis with `docker compose up -d postgres redis`; secrets are
+# read from the git-ignored .env file in the project root (see .env.example).
+# ----------------------------------------------------------------------------
+management:
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.cse444.agentgate: DEBUG
