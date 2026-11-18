@@ -67,6 +67,8 @@ public class ApprovalWorkflowService {
 
     /**
      * Pauses a high-risk tool call as a PENDING approval request and notifies the approver (FR4).
+     * The approver webhook is the administrator-configured URL of the tool (or the global default),
+     * never a URL supplied by the calling agent.
      */
     @Transactional
     public ApprovalRequestResponse createPendingApproval(
@@ -76,7 +78,6 @@ public class ApprovalWorkflowService {
             Map<String, Object> arguments,
             String policyRuleName,
             int policyRuleVersion,
-            String webhookUrl,
             Duration customTimeout
     ) {
         Duration timeout = (customTimeout != null && !customTimeout.isZero() && !customTimeout.isNegative())
@@ -94,11 +95,11 @@ public class ApprovalWorkflowService {
                 argsJson,
                 policyRuleName,
                 policyRuleVersion,
-                webhookUrl,
+                resolveApproverWebhookUrl(tool),
                 expiresAt
         );
         ApprovalRequest saved = approvalRepository.save(request);
-        webhookNotifier.notifyApproverWebhookAsync(saved);
+        webhookNotifier.notifyApprovalPending(saved);
         return ApprovalRequestResponse.from(saved);
     }
 
@@ -146,6 +147,7 @@ public class ApprovalWorkflowService {
 
         ApprovalRequest saved = approvalRepository.save(request);
         publishApprovalAuditEvent(saved, auditOutcome, downstreamLatencyMs);
+        webhookNotifier.notifyApprovalResolved(saved);
         return ApprovalRequestResponse.from(saved);
     }
 
@@ -159,6 +161,7 @@ public class ApprovalWorkflowService {
         request.reject(approverId, reason);
         ApprovalRequest saved = approvalRepository.save(request);
         publishApprovalAuditEvent(saved, "APPROVAL_REJECTED", 0L);
+        webhookNotifier.notifyApprovalResolved(saved);
         return ApprovalRequestResponse.from(saved);
     }
 
@@ -204,6 +207,7 @@ public class ApprovalWorkflowService {
         if (!expired.isEmpty()) {
             approvalRepository.saveAll(expired);
             expired.forEach(req -> publishApprovalAuditEvent(req, "APPROVAL_TIMED_OUT", 0L));
+            expired.forEach(webhookNotifier::notifyApprovalResolved);
             log.info("Expired {} unanswered approval requests on timeout (FR4)", expired.size());
         }
         return expired.size();
@@ -231,6 +235,7 @@ public class ApprovalWorkflowService {
         if (!affected.isEmpty()) {
             approvalRepository.saveAll(affected);
             affected.forEach(req -> publishApprovalAuditEvent(req, "APPROVAL_CANCELLED_BY_KILL_SWITCH", 0L));
+            affected.forEach(webhookNotifier::notifyApprovalResolved);
             log.info("Cancelled {} pending approvals due to {} Kill Switch on '{}' (FR8)",
                     affected.size(), event.scope(), event.targetIdentifier());
         }
@@ -253,6 +258,14 @@ public class ApprovalWorkflowService {
                 latencyMs,
                 Instant.now()
         ));
+    }
+
+    private String resolveApproverWebhookUrl(RegisteredTool tool) {
+        if (tool.getApprovalWebhookUrl() != null && !tool.getApprovalWebhookUrl().isBlank()) {
+            return tool.getApprovalWebhookUrl();
+        }
+        String fallback = properties.approval().defaultWebhookUrl();
+        return (fallback == null || fallback.isBlank()) ? null : fallback.trim();
     }
 
     private String executionFailurePayload(RuntimeException ex) {

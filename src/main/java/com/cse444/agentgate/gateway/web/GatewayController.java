@@ -42,8 +42,7 @@ public class GatewayController {
         GatewayToolCallRequest enriched = new GatewayToolCallRequest(
                 request.toolName(),
                 request.arguments(),
-                delegatedUser,
-                request.approvalWebhookUrl()
+                delegatedUser
         );
         return orchestrationService.processToolCall(clientId, enriched);
     }

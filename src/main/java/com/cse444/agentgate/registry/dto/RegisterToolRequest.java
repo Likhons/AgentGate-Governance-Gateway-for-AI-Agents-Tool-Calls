@@ -35,5 +35,13 @@ public record RegisterToolRequest(
         String httpMethod,
 
         @Min(100) @Max(60000)
-        int timeoutMs
+        int timeoutMs,
+
+        /*
+         * Optional approver webhook for high-risk calls to this tool (FR4). Configured by the
+         * administrator who registers the tool; when blank, agentgate.approval.default-webhook-url is used.
+         */
+        @Size(max = 512)
+        @Pattern(regexp = "^(https?://\\S+)?$", message = "approvalWebhookUrl must be blank or an http(s) URL")
+        String approvalWebhookUrl
 ) {}

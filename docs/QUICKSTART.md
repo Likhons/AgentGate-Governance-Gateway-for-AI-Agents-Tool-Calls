@@ -18,9 +18,14 @@ curl -X POST http://localhost:8080/api/v1/tools/import-openapi \
     "defaultRiskLevel": "MEDIUM",
     "baseUrlOverride": "http://host.docker.internal:8081",
     "defaultTimeoutMs": 2000,
+    "approvalWebhookUrl": null,
     "openApiContent": "openapi: 3.0.3\ninfo:\n  title: Refund API\n  version: 1.0.0\npaths:\n  /refunds:\n    post:\n      operationId: issue_refund\n      summary: Issue refund up to policy cap\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              properties:\n                orderId:\n                  type: string\n                amount:\n                  type: number\n              required: [orderId, amount]\n      responses:\n        \"200\":\n          description: OK"
   }'
 ```
+
+> `approvalWebhookUrl` (optional) is where approvers are notified when a HIGH-risk call to the
+> imported tools pauses (FR4). It is set by the administrator here, never by the agent; when it is
+> `null`, `AGENTGATE_APPROVAL_WEBHOOK_URL` from `.env` is used.
 
 ### Step 3: Register Your AI Agent as an OAuth2 Client (FR2)
 ```bash
@@ -132,3 +137,6 @@ curl -u user:password http://localhost:8080/api/v1/audit/verify
 11. **Case 11 — Agent Never Received the Final Result of a Held High-Risk Call (`FR4`):**
     - *Issue Found:* Code review against FR4 ("the agent receives a clear result in every case") showed that the only approval status endpoint, `GET /api/v1/approvals/{id}`, is restricted to `ADMIN`/`APPROVER`, so the agent that made a held call could never learn its outcome; and an approved call whose downstream failed threw inside `@Transactional`, rolling the decision back so the request stayed `PENDING` until it timed out.
     - *Fix Applied:* Added the agent-scoped `GET /api/v1/gateway/approvals/{approvalId}` (`GatewayController` → `GatewayOrchestrationService#getApprovalResultForAgent` → `ApprovalWorkflowService#getApprovalForRequestingAgent`; other agents get `404`), a `statusUrl` in the `HELD_FOR_APPROVAL` payload, and `AgentApprovalResultResponse` with an explicit `resultStatus`/`terminal`. An `execution_status` column (`V7`) records a failed downstream call as `EXECUTION_FAILED` instead of rolling back, and `approveRequest` flushes the decision before calling downstream so the `@Version` lock stops a concurrent second approval from executing a payout twice. Covered by `fr4AgentPollsFinalApprovalResult`, `fr4ApprovedCallWithFailingDownstreamReportsExecutionFailed` and `agentJwtCanPollApprovalResultButAnonymousCannot`.
+12. **Case 12 — Approver Webhook URL Supplied by the Agent (`FR4`, `QA1`):**
+    - *Issue Found:* `GatewayToolCallRequest.approvalWebhookUrl` let the calling agent choose where the gateway POSTs approval notifications, so a prompt-injected agent could exfiltrate unredacted arguments or make the gateway call internal hosts (SSRF); without that field no approver webhook was sent at all, approvers were never told how a request ended, and `agentgate.approval.webhook-timeout` was never applied.
+    - *Fix Applied:* Removed the field from the agent request; the URL now comes from the administrator-set `approvalWebhookUrl` on the tool (`RegisterToolRequest` / `OpenApiImportRequest`, `V8`) or `AGENTGATE_APPROVAL_WEBHOOK_URL`. `ApprovalWebhookNotifier` redacts arguments, applies the configured timeout, sends only after the transaction commits, and adds an `approval.resolved` webhook for approve, reject, timeout and kill-switch outcomes. Covered by `fr4ApproverWebhooksUseToolConfiguredUrlWithRedactedArguments`.

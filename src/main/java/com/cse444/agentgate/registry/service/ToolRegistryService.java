@@ -96,6 +96,7 @@ public class ToolRegistryService {
                         request.httpMethod(),
                         request.timeoutMs()
                 ));
+        tool.changeApprovalWebhookUrl(request.approvalWebhookUrl());
 
         RegisteredTool saved = toolRepository.save(tool);
         toolCache.invalidate(saved.getName());

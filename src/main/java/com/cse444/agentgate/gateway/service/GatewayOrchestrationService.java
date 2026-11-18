@@ -147,7 +147,6 @@ public class GatewayOrchestrationService {
                         args,
                         policyRuleName,
                         policyRuleVersion,
-                        request.approvalWebhookUrl(),
                         null
                 );
                 approvalId = pendingApproval.id();

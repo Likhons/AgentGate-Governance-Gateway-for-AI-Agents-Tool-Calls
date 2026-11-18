@@ -78,6 +78,8 @@ agentgate:
   approval:
     default-timeout: 15m
     webhook-timeout: 3s
+    # Fallback approver webhook for high-risk tools without their own approvalWebhookUrl (FR4)
+    default-webhook-url: ${AGENTGATE_APPROVAL_WEBHOOK_URL:}
   guards:
     max-response-bytes: 65536
     truncation-notice: "[TRUNCATED BY AGENTGATE GUARD: payload exceeded maximum permitted size]"

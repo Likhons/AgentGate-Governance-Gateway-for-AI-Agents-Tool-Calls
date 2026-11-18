@@ -72,7 +72,7 @@ public class McpToolCallbackBridge {
 
                     GatewayToolCallResponse response = orchestrationService.processToolCall(
                             clientId,
-                            new GatewayToolCallRequest(tool.name(), args, delegatedUser, null)
+                            new GatewayToolCallRequest(tool.name(), args, delegatedUser)
                     );
                     return response.redactedResultPayload();
                 } catch (Exception e) {

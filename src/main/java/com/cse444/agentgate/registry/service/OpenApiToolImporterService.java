@@ -77,7 +77,8 @@ public class OpenApiToolImporterService {
                         writeOp,
                         baseUrl + path,
                         httpMethod,
-                        request.defaultTimeoutMs()
+                        request.defaultTimeoutMs(),
+                        request.approvalWebhookUrl()
                 );
 
                 importedTools.add(toolRegistryService.registerOrUpdateTool(registerRequest));

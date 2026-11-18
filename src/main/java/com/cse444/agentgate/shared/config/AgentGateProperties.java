@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -40,9 +41,15 @@ public record AgentGateProperties(
             boolean defaultDecisionDeny
     ) {}
 
+    /**
+     * @param defaultWebhookUrl approver webhook used when a high-risk tool has no
+     *                          tool-specific {@code approvalWebhookUrl} (FR4). Blank disables it.
+     */
     public record ApprovalProperties(
             @NotNull Duration defaultTimeout,
-            @NotNull Duration webhookTimeout
+            @NotNull Duration webhookTimeout,
+            @Pattern(regexp = "^(https?://\\S+)?$", message = "must be blank or an http(s) URL")
+            String defaultWebhookUrl
     ) {}
 
     public record GuardProperties(

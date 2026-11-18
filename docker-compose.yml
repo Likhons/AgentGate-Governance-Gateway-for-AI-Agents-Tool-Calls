@@ -64,6 +64,8 @@ services:
       AGENTGATE_APPROVER_PASSWORD: ${AGENTGATE_APPROVER_PASSWORD:-approver-dev-pass}
       AGENTGATE_AUDITOR_USERNAME: ${AGENTGATE_AUDITOR_USERNAME:-auditor}
       AGENTGATE_AUDITOR_PASSWORD: ${AGENTGATE_AUDITOR_PASSWORD:-auditor-dev-pass}
+      # Optional fallback approver webhook for high-risk tools without their own approvalWebhookUrl (FR4)
+      AGENTGATE_APPROVAL_WEBHOOK_URL: ${AGENTGATE_APPROVAL_WEBHOOK_URL:-}
     ports:
       - "8080:8080"
     healthcheck:

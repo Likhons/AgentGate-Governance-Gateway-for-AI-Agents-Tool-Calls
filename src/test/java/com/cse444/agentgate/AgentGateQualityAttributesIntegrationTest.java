@@ -64,6 +64,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -89,6 +91,7 @@ class AgentGateQualityAttributesIntegrationTest {
     private static HttpServer mockDownstreamServer;
     private static int mockPort;
     private static final AtomicBoolean flakyShouldFail = new AtomicBoolean(false);
+    private static final ConcurrentLinkedQueue<String> approverWebhookBodies = new ConcurrentLinkedQueue<>();
 
     @LocalServerPort
     private int serverPort;
@@ -143,6 +146,10 @@ class AgentGateQualityAttributesIntegrationTest {
             } else {
                 sendJson(exchange, 200, "{\"healthy\":true}");
             }
+        });
+        mockDownstreamServer.createContext("/approval-webhook", exchange -> {
+            approverWebhookBodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            sendJson(exchange, 200, "{\"received\":true}");
         });
         mockDownstreamServer.createContext("/oversized", exchange ->
                 sendJson(exchange, 200, "{\"data\":\"" + "A".repeat(70_000) + "\"}"));
@@ -206,7 +213,8 @@ class AgentGateQualityAttributesIntegrationTest {
                 false,
                 baseUrl + "/orders/{customerId}",
                 "GET",
-                2000
+                2000,
+                null
         ));
 
         toolRegistryService.registerOrUpdateTool(new RegisterToolRequest(
@@ -219,7 +227,8 @@ class AgentGateQualityAttributesIntegrationTest {
                 true,
                 baseUrl + "/refunds",
                 "POST",
-                2000
+                2000,
+                null
         ));
 
         toolRegistryService.registerOrUpdateTool(new RegisterToolRequest(
@@ -232,7 +241,8 @@ class AgentGateQualityAttributesIntegrationTest {
                 true,
                 baseUrl + "/payouts",
                 "POST",
-                3000
+                3000,
+                baseUrl + "/approval-webhook"
         ));
 
         toolRegistryService.registerOrUpdateTool(new RegisterToolRequest(
@@ -245,7 +255,8 @@ class AgentGateQualityAttributesIntegrationTest {
                 false,
                 baseUrl + "/mcp-downstream",
                 "POST",
-                2000
+                2000,
+                null
         ));
 
         toolRegistryService.registerOrUpdateTool(new RegisterToolRequest(
@@ -258,7 +269,8 @@ class AgentGateQualityAttributesIntegrationTest {
                 false,
                 baseUrl + "/flaky",
                 "GET",
-                1500
+                1500,
+                null
         ));
 
         toolRegistryService.registerOrUpdateTool(new RegisterToolRequest(
@@ -271,7 +283,8 @@ class AgentGateQualityAttributesIntegrationTest {
                 false,
                 baseUrl + "/oversized",
                 "GET",
-                2000
+                2000,
+                null
         ));
 
         // Ensure support-bot has high throughput budget for QA1 200-call legitimate benchmark & approval tests
@@ -369,8 +382,7 @@ class AgentGateQualityAttributesIntegrationTest {
                 gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                         "issue_refund",
                         Map.of("orderId", "ORD-" + i, "amount", maliciousAmount),
-                        "cust-100",
-                        null
+                        "cust-100"
                 ));
             } catch (RuntimeException expectedBlock) {
                 blockedOrHeldCount++;
@@ -382,8 +394,7 @@ class AgentGateQualityAttributesIntegrationTest {
                 gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                         "lookup_order",
                         Map.of("customerId", "cust-victim-" + i),
-                        "cust-100",
-                        null
+                        "cust-100"
                 ));
             } catch (RuntimeException expectedBlock) {
                 blockedOrHeldCount++;
@@ -406,8 +417,7 @@ class AgentGateQualityAttributesIntegrationTest {
                 gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                         "lookup_order",
                         badArgs,
-                        "cust-100",
-                        null
+                        "cust-100"
                 ));
             } catch (RuntimeException expectedBlock) {
                 blockedOrHeldCount++;
@@ -418,8 +428,7 @@ class AgentGateQualityAttributesIntegrationTest {
             GatewayToolCallResponse response = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                     "bulk_payout",
                     Map.of("recipient", "vendor-" + i, "amount", 50000),
-                    "cust-100",
-                    null
+                    "cust-100"
             ));
             if ("HELD_FOR_APPROVAL".equals(response.outcome()) && response.approvalId() != null) {
                 blockedOrHeldCount++;
@@ -437,8 +446,7 @@ class AgentGateQualityAttributesIntegrationTest {
             GatewayToolCallResponse readRes = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                     "lookup_order",
                     Map.of("customerId", "cust-" + i),
-                    "cust-" + i,
-                    null
+                    "cust-" + i
             ));
             if ("EXECUTED".equals(readRes.outcome())) {
                 passed++;
@@ -458,8 +466,7 @@ class AgentGateQualityAttributesIntegrationTest {
             GatewayToolCallResponse refundRes = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                     "issue_refund",
                     Map.of("orderId", "ORD-" + i, "amount", 500 + (i % 1000)),
-                    "cust-" + i,
-                    null
+                    "cust-" + i
             ));
             if ("EXECUTED".equals(refundRes.outcome())) {
                 passed++;
@@ -478,8 +485,7 @@ class AgentGateQualityAttributesIntegrationTest {
         GatewayToolCallResponse mcpRes = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                 "mcp_downstream_ping",
                 Map.of("region", "dhaka"),
-                "cust-100",
-                null
+                "cust-100"
         ));
         assertThat(mcpRes.outcome()).isEqualTo("EXECUTED");
         assertThat(mcpRes.redactedResultPayload()).contains("mcp-downstream-ok");
@@ -489,7 +495,7 @@ class AgentGateQualityAttributesIntegrationTest {
         for (int i = 0; i < 6; i++) {
             try {
                 gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
-                        "flaky_tool", Map.of("probe", "fail-" + i), "cust-100", null));
+                        "flaky_tool", Map.of("probe", "fail-" + i), "cust-100"));
             } catch (RuntimeException ignored) {
             }
         }
@@ -538,7 +544,7 @@ class AgentGateQualityAttributesIntegrationTest {
                 .header("Authorization", "Bearer " + accessToken)
                 .header("X-On-Behalf-Of-User", "cust-http-1")
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(new GatewayToolCallRequest("lookup_order", Map.of("customerId", "cust-http-1"), "cust-http-1", null))
+                .body(new GatewayToolCallRequest("lookup_order", Map.of("customerId", "cust-http-1"), "cust-http-1"))
                 .retrieve()
                 .body(GatewayToolCallResponse.class);
         assertThat(httpRes).isNotNull();
@@ -599,8 +605,7 @@ class AgentGateQualityAttributesIntegrationTest {
         GatewayToolCallResponse pausedForEdit = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                 "bulk_payout",
                 Map.of("recipient", "vendor-A", "amount", 25000),
-                "cust-100",
-                null
+                "cust-100"
         ));
         ApprovalRequestResponse approvedEdited = approvalWorkflowService.approveRequest(
                 pausedForEdit.approvalId(),
@@ -614,8 +619,7 @@ class AgentGateQualityAttributesIntegrationTest {
         GatewayToolCallResponse pausedForReject = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                 "bulk_payout",
                 Map.of("recipient", "vendor-B", "amount", 30000),
-                "cust-100",
-                null
+                "cust-100"
         ));
         ApprovalRequestResponse rejected = approvalWorkflowService.rejectRequest(
                 pausedForReject.approvalId(), "Unverified beneficiary", "senior-approver");
@@ -625,7 +629,7 @@ class AgentGateQualityAttributesIntegrationTest {
         RegisteredTool payoutTool = toolRegistryService.getRequiredToolByName("bulk_payout");
         ApprovalRequestResponse expiredReq = approvalWorkflowService.createPendingApproval(
                 "support-bot", "cust-100", payoutTool, Map.of("recipient", "vendor-C", "amount", 5000),
-                "allow-high-risk-payout-with-human-approval", 1, null, Duration.ofMillis(1)
+                "allow-high-risk-payout-with-human-approval", 1, Duration.ofMillis(1)
         );
         try {
             Thread.sleep(20);
@@ -639,7 +643,7 @@ class AgentGateQualityAttributesIntegrationTest {
 
         // 4. Oversized tool result is truncated with notice (FR5)
         GatewayToolCallResponse truncatedRes = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
-                "oversized_report", Map.of("reportId", "R-1"), "cust-100", null));
+                "oversized_report", Map.of("reportId", "R-1"), "cust-100"));
         assertThat(truncatedRes.redactedResultPayload()).contains("[TRUNCATED BY AGENTGATE GUARD");
     }
 
@@ -652,13 +656,13 @@ class AgentGateQualityAttributesIntegrationTest {
         // 2 write calls pass
         for (int i = 1; i <= 2; i++) {
             GatewayToolCallResponse res = gatewayService.processToolCall("rate-limited-bot", new GatewayToolCallRequest(
-                    "issue_refund", Map.of("orderId", "ORD-RL-" + i, "amount", 100), "cust-rl", null));
+                    "issue_refund", Map.of("orderId", "ORD-RL-" + i, "amount", 100), "cust-rl"));
             assertThat(res.outcome()).isEqualTo("EXECUTED");
         }
 
         // 3rd write call breaches hourly write blast-radius cap (limit=2)
         assertThatThrownBy(() -> gatewayService.processToolCall("rate-limited-bot", new GatewayToolCallRequest(
-                "issue_refund", Map.of("orderId", "ORD-RL-3", "amount", 100), "cust-rl", null)))
+                "issue_refund", Map.of("orderId", "ORD-RL-3", "amount", 100), "cust-rl")))
                 .isInstanceOf(LimitExceededException.class)
                 .hasMessageContaining("WRITE_BLAST_RADIUS_CAP");
     }
@@ -669,8 +673,7 @@ class AgentGateQualityAttributesIntegrationTest {
         gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                 "bulk_payout",
                 Map.of("recipient", "merchant-dhaka-01712345678", "amount", 15000),
-                "cust-888",
-                null
+                "cust-888"
         ));
 
         Page<AuditLogResponse> found = auditTrailService.searchAuditLogs(
@@ -771,7 +774,8 @@ class AgentGateQualityAttributesIntegrationTest {
                 "CommsTeam",
                 RiskLevel.HIGH,
                 "http://127.0.0.1:" + mockPort,
-                2500
+                2500,
+                null
         ));
         assertThat(imported).hasSize(1);
         assertThat(imported.getFirst().name()).isEqualTo("send_customer_sms");
@@ -780,8 +784,7 @@ class AgentGateQualityAttributesIntegrationTest {
         GatewayToolCallResponse paused = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                 "bulk_payout",
                 Map.of("recipient", "vendor-99", "amount", 9000),
-                "cust-100",
-                null
+                "cust-100"
         ));
         try {
             toolRegistryService.disableTool("bulk_payout", "Emergency freeze", "sec-ops");
@@ -795,8 +798,7 @@ class AgentGateQualityAttributesIntegrationTest {
         GatewayToolCallResponse pausedForGlobalWrite = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                 "bulk_payout",
                 Map.of("recipient", "vendor-100", "amount", 9500),
-                "cust-100",
-                null
+                "cust-100"
         ));
         try {
             toolRegistryService.setAllWriteToolsKillSwitch(true, "Incident response freeze", "sec-ops");
@@ -804,12 +806,12 @@ class AgentGateQualityAttributesIntegrationTest {
                     .isEqualTo(ApprovalStateType.CANCELLED_BY_KILL_SWITCH);
 
             assertThatThrownBy(() -> gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
-                    "issue_refund", Map.of("orderId", "ORD-9", "amount", 100), "cust-100", null)))
+                    "issue_refund", Map.of("orderId", "ORD-9", "amount", 100), "cust-100")))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("Kill Switch");
 
             GatewayToolCallResponse readStillWorks = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
-                    "lookup_order", Map.of("customerId", "cust-100"), "cust-100", null));
+                    "lookup_order", Map.of("customerId", "cust-100"), "cust-100"));
             assertThat(readStillWorks.outcome()).isEqualTo("EXECUTED");
         } finally {
             toolRegistryService.setAllWriteToolsKillSwitch(false, "Cleared", "sec-ops");
@@ -823,8 +825,7 @@ class AgentGateQualityAttributesIntegrationTest {
         GatewayToolCallResponse held = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                 "bulk_payout",
                 Map.of("recipient", "vendor-P", "amount", 7000),
-                "cust-100",
-                null
+                "cust-100"
         ));
         assertThat(held.outcome()).isEqualTo("HELD_FOR_APPROVAL");
         assertThat(held.redactedResultPayload()).contains("/api/v1/gateway/approvals/" + held.approvalId());
@@ -851,7 +852,7 @@ class AgentGateQualityAttributesIntegrationTest {
 
         // 4. Rejected and timed-out calls also end in an explicit terminal status
         GatewayToolCallResponse toReject = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
-                "bulk_payout", Map.of("recipient", "vendor-R", "amount", 8000), "cust-100", null));
+                "bulk_payout", Map.of("recipient", "vendor-R", "amount", 8000), "cust-100"));
         approvalWorkflowService.rejectRequest(toReject.approvalId(), "Unknown vendor", "senior-approver");
         assertThat(gatewayService.getApprovalResultForAgent("support-bot", toReject.approvalId()).resultStatus())
                 .isEqualTo("REJECTED");
@@ -859,7 +860,7 @@ class AgentGateQualityAttributesIntegrationTest {
         RegisteredTool payoutTool = toolRegistryService.getRequiredToolByName("bulk_payout");
         ApprovalRequestResponse expiring = approvalWorkflowService.createPendingApproval(
                 "support-bot", "cust-100", payoutTool, Map.of("recipient", "vendor-T", "amount", 100),
-                "allow-high-risk-payout-with-human-approval", 1, null, Duration.ofMillis(1));
+                "allow-high-risk-payout-with-human-approval", 1, Duration.ofMillis(1));
         sleepQuietly(20);
         approvalWorkflowService.expireTimedOutApprovals();
         AgentApprovalResultResponse timedOut = gatewayService.getApprovalResultForAgent("support-bot", expiring.id());
@@ -880,7 +881,8 @@ class AgentGateQualityAttributesIntegrationTest {
                 true,
                 "http://127.0.0.1:" + mockPort + "/flaky",
                 "POST",
-                1500
+                1500,
+                null
         ));
         policyEngineService.createOrVersionPolicyRule(new CreatePolicyRuleRequest(
                 "allow-high-risk-flaky-transfer",
@@ -894,7 +896,7 @@ class AgentGateQualityAttributesIntegrationTest {
         ), "security-admin");
 
         GatewayToolCallResponse held = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
-                "high_risk_flaky_transfer", Map.of("probe", "transfer-1"), "cust-100", null));
+                "high_risk_flaky_transfer", Map.of("probe", "transfer-1"), "cust-100"));
         assertThat(held.outcome()).isEqualTo("HELD_FOR_APPROVAL");
 
         flakyShouldFail.set(true);
@@ -907,6 +909,32 @@ class AgentGateQualityAttributesIntegrationTest {
         assertThat(result.resultStatus()).isEqualTo("EXECUTION_FAILED");
         assertThat(result.terminal()).isTrue();
         assertThat(result.resultPayload()).contains("DOWNSTREAM_EXECUTION_FAILED");
+    }
+
+    @Test
+    @DisplayName("FR4 Approver Webhooks: pending and resolved webhooks go to the tool's admin-configured URL with redacted arguments")
+    void fr4ApproverWebhooksUseToolConfiguredUrlWithRedactedArguments() {
+        approverWebhookBodies.clear();
+
+        GatewayToolCallResponse held = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+                "bulk_payout",
+                Map.of("recipient", "vendor-01712345678", "amount", 7000),
+                "cust-100"
+        ));
+        assertThat(held.outcome()).isEqualTo("HELD_FOR_APPROVAL");
+
+        // The webhook URL comes from the tool registration (never from the agent) and arguments are redacted
+        String pendingWebhook = awaitApproverWebhook("approval.pending", held.approvalId());
+        assertThat(pendingWebhook)
+                .contains("\"toolName\":\"bulk_payout\"")
+                .contains("[REDACTED_BD_PHONE]")
+                .doesNotContain("01712345678");
+
+        // The approver channel is also told how the request ended
+        approvalWorkflowService.rejectRequest(held.approvalId(), "Unknown vendor", "senior-approver");
+        assertThat(awaitApproverWebhook("approval.resolved", held.approvalId()))
+                .contains("\"state\":\"REJECTED\"")
+                .contains("\"decidedBy\":\"senior-approver\"");
     }
 
     private String issueAgentAccessToken(String clientId, String clientSecret) {
@@ -923,6 +951,19 @@ class AgentGateQualityAttributesIntegrationTest {
                 .body(Map.class);
         assertThat(tokenBody).isNotNull();
         return (String) tokenBody.get("access_token");
+    }
+
+    private static String awaitApproverWebhook(String event, UUID approvalId) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (System.nanoTime() < deadline) {
+            for (String body : approverWebhookBodies) {
+                if (body.contains("\"event\":\"" + event + "\"") && body.contains(approvalId.toString())) {
+                    return body;
+                }
+            }
+            sleepQuietly(50);
+        }
+        throw new AssertionError("No '" + event + "' approver webhook received for approval " + approvalId);
     }
 
     private static void sleepQuietly(long millis) {

@@ -55,6 +55,13 @@ public class RegisteredTool {
     @Column(name = "timeout_ms", nullable = false)
     private int timeoutMs;
 
+    /**
+     * Administrator-configured approver webhook for high-risk calls to this tool (FR4).
+     * Never taken from the calling agent, so a prompt-injected agent cannot redirect approval traffic.
+     */
+    @Column(name = "approval_webhook_url", length = 512)
+    private String approvalWebhookUrl;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -129,6 +136,13 @@ public class RegisteredTool {
         this.updatedAt = Instant.now();
     }
 
+    public void changeApprovalWebhookUrl(String approvalWebhookUrl) {
+        this.approvalWebhookUrl = (approvalWebhookUrl == null || approvalWebhookUrl.isBlank())
+                ? null
+                : approvalWebhookUrl.trim();
+        this.updatedAt = Instant.now();
+    }
+
     public boolean isEnabled() {
         return this.status == ToolStatus.ENABLED;
     }
@@ -179,6 +193,10 @@ public class RegisteredTool {
 
     public int getTimeoutMs() {
         return timeoutMs;
+    }
+
+    public String getApprovalWebhookUrl() {
+        return approvalWebhookUrl;
     }
 
     public Instant getCreatedAt() {
