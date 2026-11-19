@@ -157,6 +157,17 @@
                     <textarea id="sim-args" class="mono" rows="5">{"orderId": "ORD-101", "amount": 1200}</textarea>
                 </div>
 
+                <details id="sim-draft-box" class="draft-box">
+                    <summary>Draft rules for the playground (optional, FR9)</summary>
+                    <p class="card-sub">Leave empty to test the active policies. A JSON array of draft rules is evaluated instead of them and is never saved.</p>
+                    <div class="preset-row draft-presets">
+                        <button class="chip" type="button" onclick="AgentGateUI.loadSampleDraft()">Sample: refund cap 1,000 BDT</button>
+                        <button class="chip" type="button" onclick="AgentGateUI.clearDraft()">Clear (use active policies)</button>
+                    </div>
+                    <label class="field-label" for="sim-drafts">Draft Rules JSON</label>
+                    <textarea id="sim-drafts" class="mono" rows="9" placeholder='[{"ruleName": "...", "priority": 20, "agentPattern": "support-bot", "toolPattern": "issue_refund", "effect": "ALLOW", "conditions": []}]'></textarea>
+                </details>
+
                 <div class="btn-row">
                     <button class="btn btn-primary" type="button" onclick="AgentGateUI.executeGatewayCall()">Execute Governed Call</button>
                     <button class="btn" type="button" onclick="AgentGateUI.testPlayground()">Test Policy Playground (FR9)</button>

@@ -34,6 +34,19 @@ const AgentGateUI = (() => {
         }
     };
 
+    // FR9: a draft that lowers the refund cap, so the same 1,200 BDT refund is allowed by the
+    // active policies but denied by the draft
+    const SAMPLE_DRAFT = [{
+        ruleName: 'allow-refund-up-to-1000-bdt',
+        priority: 20,
+        agentPattern: 'support-bot',
+        toolPattern: 'issue_refund',
+        effect: 'ALLOW',
+        dryRun: false,
+        conditions: [{ field: 'amount', operator: 'LTE', expectedValue: '1000' }],
+        description: 'Draft: lower the refund cap to 1,000 BDT'
+    }];
+
     function getAuthHeader() {
         return sessionStorage.getItem(STORAGE_KEY);
     }
@@ -220,13 +233,34 @@ const AgentGateUI = (() => {
         const agent = document.getElementById('sim-agent').value.trim();
         const user = document.getElementById('sim-user').value.trim();
         const tool = document.getElementById('sim-tool').value.trim();
+        const draftRules = readDraftRules();
+        if (draftRules === undefined) return;
+
+        const payload = { agentClientId: agent, delegatedUserId: user, toolName: tool, arguments: argsObj };
+        if (draftRules) payload.draftRules = draftRules;
+        const mode = draftRules
+            ? `${draftRules.length} draft rule${draftRules.length === 1 ? '' : 's'}`
+            : 'active policies';
 
         const res = await apiFetch('/api/v1/policies/playground', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agentClientId: agent, delegatedUserId: user, toolName: tool, arguments: argsObj })
+            body: JSON.stringify(payload)
         });
         const d = res.data || {};
+        if (!res.ok) {
+            const detail = d.detail || d.title || `HTTP ${res.status}`;
+            setRail({
+                identity: { state: 'pass', text: `${agent} (${user})` },
+                policy: { state: 'fail', text: 'Playground request rejected' },
+                guard: { state: 'idle', text: 'Dry Playground Mode' },
+                downstream: { state: 'idle', text: 'Not executed (FR9)' },
+                audit: { state: 'idle', text: 'Zero side-effects' }
+            }, `Playground rejected (${res.status}): ${detail}`);
+            renderSimResult(res.status, 'PLAYGROUND: REJECTED', '—', '—', d, false);
+            showToast(`Playground ${res.status}: ${detail}`);
+            return;
+        }
         const allow = Boolean(d.allowed);
         setRail({
             identity: { state: 'pass', text: `${agent} (${user})` },
@@ -234,8 +268,41 @@ const AgentGateUI = (() => {
             guard: { state: 'idle', text: 'Dry Playground Mode' },
             downstream: { state: 'idle', text: 'Not executed (FR9)' },
             audit: { state: 'idle', text: 'Zero side-effects' }
-        }, `Playground: ${d.effectiveDecision || res.status} — ${d.reason || ''}`);
-        renderSimResult(res.status, `PLAYGROUND: ${d.effectiveDecision}`, `${d.matchedRuleName || 'DEFAULT'}@v${d.matchedRuleVersion || 0}`, '0 ms (dry)', d, false);
+        }, `Playground (${mode}): ${d.effectiveDecision || res.status} — ${d.reason || ''}`);
+        renderSimResult(res.status, `PLAYGROUND (${draftRules ? 'DRAFT' : 'ACTIVE'}): ${d.effectiveDecision}`, `${d.matchedRuleName || 'DEFAULT'}@v${d.matchedRuleVersion || 0}`, '0 ms (dry)', d, false);
+    }
+
+    /**
+     * FR9: reads the optional draft rules box. Returns null to test the active policies,
+     * the draft rules to test them instead, or undefined when the box is invalid.
+     */
+    function readDraftRules() {
+        const text = document.getElementById('sim-drafts').value.trim();
+        if (!text) return null;
+        let parsed;
+        try {
+            parsed = JSON.parse(text);
+        } catch {
+            showToast('Invalid JSON in Draft Rules box');
+            return undefined;
+        }
+        const rules = Array.isArray(parsed) ? parsed : [parsed];
+        if (rules.length === 0) return null;
+        if (rules.some(r => !r || typeof r !== 'object' || typeof r.priority !== 'number')) {
+            showToast('Each draft rule needs ruleName, priority (a number), agentPattern, toolPattern and effect');
+            return undefined;
+        }
+        // dryRun is a required boolean on the server; a draft may leave it out
+        return rules.map(r => ({ dryRun: false, ...r }));
+    }
+
+    function loadSampleDraft() {
+        document.getElementById('sim-drafts').value = JSON.stringify(SAMPLE_DRAFT, null, 2);
+        document.getElementById('sim-draft-box').open = true;
+    }
+
+    function clearDraft() {
+        document.getElementById('sim-drafts').value = '';
     }
 
     function renderSimResult(status, outcome, rule, latency, payload, showApprovalJump) {
@@ -509,6 +576,8 @@ const AgentGateUI = (() => {
         applyPreset,
         executeGatewayCall,
         testPlayground,
+        loadSampleDraft,
+        clearDraft,
         unlockOperator,
         refreshOperatorData,
         toggleTool,

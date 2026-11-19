@@ -580,6 +580,26 @@ tr:last-child td { border-bottom: none; }
     z-index: 50;
 }
 
+/* FR9: optional draft rules for the policy playground */
+.draft-box {
+    margin-top: 10px;
+    border: 1px solid var(--border-hairline);
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: var(--bg-subtle);
+}
+
+.draft-box summary {
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-secondary);
+}
+
+.draft-box[open] summary { margin-bottom: 6px; }
+
+.draft-presets { margin: 8px 0; }
+
 @media (max-width: 960px) {
     .rail-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
