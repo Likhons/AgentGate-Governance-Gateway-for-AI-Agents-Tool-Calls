@@ -72,10 +72,11 @@ curl -X POST http://localhost:8080/api/v1/policies \
 
 ### Step 5: Test in the Policy Playground & Execute via OAuth2 JWT (FR2, FR9)
 ```bash
-# 1. Obtain OAuth2 Client Credentials Token
+# 1. Obtain OAuth2 Client Credentials Token (sed instead of jq, which Git Bash on Windows does not ship)
 TOKEN=$(curl -s -X POST http://localhost:8080/oauth2/token \
   -d "grant_type=client_credentials&client_id=support-bot&client_secret=support-secret-2026&delegated_user=cust-101" \
-  | jq -r .access_token)
+  | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+echo "${TOKEN:0:20}..."   # an eyJ... token; an error message here means the token request failed
 
 # 2. Execute Governed Tool Call
 curl -X POST http://localhost:8080/api/v1/gateway/call \
@@ -214,3 +215,6 @@ The QA4 drill pauses the `agentgate-postgres` container for a few seconds and un
 27. **Case 27 — `/mcp/tools` Was the One List Endpoint Without Pagination (`C3`, `FR1`):**
     - *Issue Found:* A requirement-by-requirement check against C3 ("pagination on every list endpoint") showed that every list endpoint returned a Spring `Page` except `GET /mcp/tools`, which returned all permitted tools at once.
     - *Fix Applied:* `/mcp/tools` takes `page` and `size` (50 by default), sorts the tools by name so pages are stable, and returns `tools` with `number`, `size`, `totalElements` and `totalPages`; existing clients that read `tools` keep working. `c3McpToolDiscoveryIsPaginated` pages through the list one tool at a time and checks it matches the full list; full suite 40/40.
+28. **Case 28 — The Quick Start Needed `jq`, Which Git Bash on Windows Does Not Ship (`QA5`):**
+    - *Issue Found:* While preparing the QA5 classmate trial on the project laptop, the token step of Part 1 piped the reply through `jq -r .access_token`; Git Bash on Windows has no `jq`, so `TOKEN` stayed empty and every following call would have failed with `401`, costing a new developer time that QA5 measures.
+    - *Fix Applied:* The token step extracts `access_token` with `sed`, which Git Bash, Linux and macOS all have, and prints the start of the token so a failed request is noticed at once; checked on the laptop (token issued, gateway call `200`). The trial itself is prepared in `docs/QA5_TRIAL.md`: host checklist, the developer's task card (import a new Invoice API as a LOW-risk tool, write a policy, call it as the agent) and a result form for `EVIDENCE_REPORT.md`.
