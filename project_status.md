@@ -43,12 +43,14 @@
   - FR2/QA1: the end user is the token's `delegated_user`; naming another user in the body or `X-On-Behalf-Of-User` is rejected with `403 Delegated User Mismatch` and audited. The k6 QA1 suite gets one token per customer.
   - FR2: Spring Authorization Server (`identity.security`) issues the HS256 agent tokens, with introspection, revocation and metadata that lists only `client_credentials`; the hand-written `/oauth2/token` is gone (ADR-005).
   - Full suite 36/36; live script 4/4 (QA2 `p(95) = 2 ms` overhead, QA1 30/30 + 200/200, QA4 LOW call in 13 ms, QA3 36,735 intact); token, user-binding and FR6 alert drills in `EVIDENCE_REPORT.md` §9.
+- **Step 12 — FR3 Fail-Closed Policy Conditions (2026-11-19, AI-Usage Log Case 21):**
+  - A policy rule whose stored conditions cannot be read (or lack a field, operator or expected value) now denies every call that reaches it instead of acting as an unconditional rule; a dry-run DENY rule still never blocks. Covered by `PolicyAndConditionUnitTest#unreadableStoredConditionsFailClosed`; full suite 37/37.
 
 ## 2. Current State of the Application
-- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **36/36 passing** (`0` failures, `0` skipped) as of 2026-11-19.
+- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **37/37 passing** (`0` failures, `0` skipped) as of 2026-11-19.
 - Live checks (`bash load-tests/run-live-qa.sh`, also run in CI) pass **QA1 (`100%`)**, **QA2 (`p(95) = 2 ms` overhead @ 100 RPS)**, **QA3 (`36,735/36,735` intact)**, **QA4 (real PostgreSQL outage drill)**; **QA5** (live OpenAPI import) and **C1** (`735.2 MiB` total stack RAM < `8 GB`) as of 2026-11-18.
 - Benchmark tip: close memory-heavy apps before QA2 (keep `>= 1.5 GB` host RAM free); see EVIDENCE_REPORT §7.
-- All evidence, ADRs, AI-Usage Log entries (Cases 1–20), and fixes are documented.
+- All evidence, ADRs, AI-Usage Log entries (Cases 1–21), and fixes are documented.
 
 ## 3. Immediate Next Steps for Next Session (TODOs)
 1. **Mid-Project Checkpoint Change Request (Requirement C10):** When the instructor issues the checkpoint change request, implement it as a new pluggable bean/module with zero edits to core orchestrators, and log touched files.

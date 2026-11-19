@@ -67,9 +67,14 @@ public class PolicyEngineService {
     private final AtomicBoolean probeInFlight = new AtomicBoolean(false);
     private final ExecutorService probeExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
+    /**
+     * @param conditionsUnreadable the stored conditions could not be read or are incomplete; a call that reaches
+     *                             such a rule is denied instead of the rule acting as if it had no conditions (FR3)
+     */
     public record CompiledPolicyRule(
             PolicyRule rule,
-            List<PolicyCondition> conditions
+            List<PolicyCondition> conditions,
+            boolean conditionsUnreadable
     ) {}
 
     public record PolicySnapshot(
@@ -101,7 +106,7 @@ public class PolicyEngineService {
         try {
             List<PolicyRule> activeRules = policyRepository.findAllByActiveTrueOrderByPriorityAscVersionDesc();
             List<CompiledPolicyRule> compiled = activeRules.stream()
-                    .map(r -> new CompiledPolicyRule(r, parseConditions(r.getConditionsJson())))
+                    .map(this::compile)
                     .toList();
             activeSnapshot.set(new PolicySnapshot(compiled, Instant.now()));
             if (!policyStoreReachable.getAndSet(true)) {
@@ -290,7 +295,8 @@ public class PolicyEngineService {
                                     draft.description(),
                                     "playground-draft"
                             ),
-                            draft.conditions() != null ? draft.conditions() : List.of()
+                            draft.conditions() != null ? draft.conditions() : List.of(),
+                            false
                     ))
                     .toList();
         } else {
@@ -326,6 +332,12 @@ public class PolicyEngineService {
             if (!matchesPattern(rule.getAgentPattern(), agentClientId) || !matchesPattern(rule.getToolPattern(), toolName)) {
                 continue;
             }
+            if (compiled.conditionsUnreadable()) {
+                if (rule.isDryRun() && rule.getEffect() == PolicyEffect.DENY) {
+                    continue;
+                }
+                return false;
+            }
             if (rule.getEffect() == PolicyEffect.ALLOW) {
                 return true;
             }
@@ -353,6 +365,27 @@ public class PolicyEngineService {
             }
             if (!matchesPattern(rule.getToolPattern(), toolName)) {
                 continue;
+            }
+
+            // FR3: a rule whose stored conditions cannot be read fails closed; it must never act as unconditional.
+            // A dry-run DENY rule only logs, so it still never blocks.
+            if (compiled.conditionsUnreadable()) {
+                if (rule.isDryRun() && rule.getEffect() == PolicyEffect.DENY) {
+                    continue;
+                }
+                return new PolicyEvaluationDecision(
+                        false,
+                        PolicyEffect.DENY,
+                        rule.getId(),
+                        rule.getRuleName(),
+                        rule.getVersion(),
+                        dryRunBlockedByRule != null,
+                        dryRunBlockedByRule,
+                        fromFailsafeCache,
+                        "Policy rule '" + rule.getRuleName() + "' (v" + rule.getVersion()
+                                + ") has unreadable conditions; failing closed (FR3)",
+                        Instant.now()
+                );
             }
 
             boolean conditionsMatch;
@@ -426,12 +459,41 @@ public class PolicyEngineService {
         return pattern.equals(value);
     }
 
-    private List<PolicyCondition> parseConditions(String json) {
+    private CompiledPolicyRule compile(PolicyRule rule) {
+        try {
+            return new CompiledPolicyRule(rule, readConditions(rule.getConditionsJson()), false);
+        } catch (Exception ex) {
+            log.error("Policy rule '{}' (v{}) has unreadable conditions; calls that reach it fail closed (FR3): {}",
+                    rule.getRuleName(), rule.getVersion(), ex.getMessage());
+            return new CompiledPolicyRule(rule, List.of(), true);
+        }
+    }
+
+    /**
+     * Reads stored conditions. Blank means "no conditions"; anything that cannot be read, or a condition
+     * without a field, operator or expected value, is an error rather than an empty list (FR3).
+     */
+    private List<PolicyCondition> readConditions(String json) throws Exception {
         if (json == null || json.isBlank()) {
             return List.of();
         }
+        List<PolicyCondition> conditions = objectMapper.readValue(json, new TypeReference<>() {});
+        if (conditions == null) {
+            throw new IllegalArgumentException("conditions are null");
+        }
+        for (PolicyCondition condition : conditions) {
+            if (condition == null || condition.field() == null || condition.field().isBlank()
+                    || condition.operator() == null || condition.expectedValue() == null) {
+                throw new IllegalArgumentException("incomplete condition " + condition);
+            }
+        }
+        return conditions;
+    }
+
+    /** Lenient read for listing rules only; evaluation uses {@link #compile}. */
+    private List<PolicyCondition> parseConditions(String json) {
         try {
-            return objectMapper.readValue(json, new TypeReference<>() {});
+            return readConditions(json);
         } catch (Exception e) {
             return List.of();
         }
