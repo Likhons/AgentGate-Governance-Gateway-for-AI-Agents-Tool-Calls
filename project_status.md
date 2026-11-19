@@ -51,6 +51,8 @@
   - The simulator's optional "Draft rules" box sends `draftRules` to the playground, so a sample call can be tested against draft policies from the dashboard as well as the API; results are labelled DRAFT or ACTIVE and request errors are shown.
 - **Step 15 — QA3 Audit Search in the Dashboard (2026-11-19, AI-Usage Log Case 24):**
   - The audit API and CSV export accept `callId` and the same filters; the dashboard's audit tab searches by call ID, agent, user, tool, outcome and rule with paging and per-call details, and the simulator links a call to its audit record.
+- **Step 16 — Dashboard Session Survives a Reload (2026-11-19, AI-Usage Log Case 25):**
+  - A reload reopens the operator panels from the stored session, a rejected session is dropped, and a wrong password shows a toast instead of the browser's login popup.
 
 ## 2. Current State of the Application
 - Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **38/38 passing** (`0` failures, `0` skipped) as of 2026-11-19.

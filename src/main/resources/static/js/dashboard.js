@@ -88,6 +88,9 @@ const AgentGateUI = (() => {
         if (auth && !headers.has('Authorization')) {
             headers.set('Authorization', auth);
         }
+        // Marks the call as a script request: Spring Security then answers a wrong password with a plain
+        // 401 instead of "WWW-Authenticate: Basic", so the browser shows no native login popup
+        headers.set('X-Requested-With', 'XMLHttpRequest');
         const res = await fetch(url, { ...options, headers });
         const text = await res.text();
         let data = null;
@@ -336,13 +339,38 @@ const AgentGateUI = (() => {
     async function unlockOperator(silent = false) {
         const u = document.getElementById('op-user').value.trim();
         const p = document.getElementById('op-pass').value;
-        const header = 'Basic ' + btoa(`${u}:${p}`);
+        await openOperatorSession('Basic ' + btoa(`${u}:${p}`), silent);
+    }
+
+    /**
+     * After a page reload, reopens the operator session kept in sessionStorage. The stored header is
+     * checked, not the (empty) password box; a header the server rejects is dropped, while an
+     * unreachable server keeps it for the next reload.
+     */
+    async function restoreOperatorSession() {
+        const stored = getAuthHeader();
+        if (!stored) return;
+        try {
+            if (!await openOperatorSession(stored, true)) {
+                sessionStorage.removeItem(STORAGE_KEY);
+                // the health check on load sent the rejected header too; check again without it
+                checkHealth();
+            }
+        } catch {
+            // server unreachable: keep the session and try again on the next reload
+        }
+    }
+
+    /** Checks a Basic auth header against the server and unlocks the operator panels; false on 401. */
+    async function openOperatorSession(header, silent) {
         const probe = await apiFetch('/api/v1/audit/verify', { headers: { Authorization: header } });
         if (!probe.ok && probe.status === 401) {
             if (!silent) showToast('Invalid credentials (use the AGENTGATE_ADMIN_* values from .env)');
-            return;
+            return false;
         }
+        const u = operatorName(header);
         sessionStorage.setItem(STORAGE_KEY, header);
+        document.getElementById('op-user').value = u;
         document.getElementById('unlock-btn').textContent = `Unlocked (${u})`;
         document.getElementById('unlock-btn').className = 'btn btn-ok btn-sm';
         ['registry', 'approvals', 'audit'].forEach(section => {
@@ -351,6 +379,15 @@ const AgentGateUI = (() => {
         });
         await refreshOperatorData();
         if (!silent) showToast(`Operator console unlocked as ${u}`);
+        return true;
+    }
+
+    function operatorName(header) {
+        try {
+            return atob(header.slice('Basic '.length)).split(':')[0] || 'operator';
+        } catch {
+            return 'operator';
+        }
     }
 
     async function refreshOperatorData() {
@@ -684,9 +721,7 @@ const AgentGateUI = (() => {
 
     window.addEventListener('DOMContentLoaded', () => {
         checkHealth();
-        if (getAuthHeader()) {
-            unlockOperator(true);
-        }
+        restoreOperatorSession();
     });
 
     return {
