@@ -105,7 +105,9 @@ curl -u "$ADMIN" "http://localhost:8080/api/v1/audit?callId=<callId>"
 
 New and edited tools appear on the MCP endpoint within `agentgate.mcp.tool-sync-interval` (5 s)
 without a restart; a tool kill switch withdraws the tool immediately (FR1, FR8, FR10). `GET /mcp/tools`
-with the agent's token lists only the tools that agent's policies allow.
+with the agent's token lists only the tools that agent's policies allow, sorted by name and paged like every
+other list endpoint (`?page=0&size=50` by default; the reply carries `tools`, `number`, `size`, `totalElements` and
+`totalPages`, C3).
 
 ### Optional: Run the Live Quality-Attribute Checks (C5)
 ```bash
@@ -209,3 +211,6 @@ The QA4 drill pauses the `agentgate-postgres` container for a few seconds and un
 26. **Case 26 — The QA4 Probe Shared Spring's Scheduler With Tasks That Block on the Database (`QA4`):**
     - *Issue Found:* CI run `44509718702` failed the live QA4 drill: with PostgreSQL paused, `policyStore` stayed `UP` for 30 s, a `MEDIUM` refund executed and a `HIGH` payout returned `500`. The 2-second probe was a fixed-delay `@Scheduled` method on Spring's shared scheduler; a database-bound scheduled task waited there for the 30-second socket timeout, so the probe did not run. Local runs had passed only because the probe usually ran first.
     - *Fix Applied:* The probe runs on a timer thread of its own (`policy-store-probe`), started after the startup policy load; the database call stays on a virtual thread bounded by 1.5 s, and an exception keeps the schedule running and fails closed. The new `qa4ProbeDetectsOutageWhileSpringSchedulerIsBusy` blocks Spring's scheduler and pauses PostgreSQL: it failed on the old code (not detected within 8 s) and passes now (detected in about 2.5–3.5 s); full suite 39/39; the live script passed 4/4. Recorded as ADR-003 Revision 2 and `EVIDENCE_REPORT.md` §10.
+27. **Case 27 — `/mcp/tools` Was the One List Endpoint Without Pagination (`C3`, `FR1`):**
+    - *Issue Found:* A requirement-by-requirement check against C3 ("pagination on every list endpoint") showed that every list endpoint returned a Spring `Page` except `GET /mcp/tools`, which returned all permitted tools at once.
+    - *Fix Applied:* `/mcp/tools` takes `page` and `size` (50 by default), sorts the tools by name so pages are stable, and returns `tools` with `number`, `size`, `totalElements` and `totalPages`; existing clients that read `tools` keep working. `c3McpToolDiscoveryIsPaginated` pages through the list one tool at a time and checks it matches the full list; full suite 40/40.

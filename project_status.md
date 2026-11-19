@@ -55,12 +55,14 @@
   - A reload reopens the operator panels from the stored session, a rejected session is dropped, and a wrong password shows a toast instead of the browser's login popup.
 - **Step 17 — QA4 Probe on Its Own Thread (2026-11-19, AI-Usage Log Case 26):**
   - CI run `44509718702` failed the live QA4 drill because the policy-store probe shared Spring's scheduler with tasks that block on PostgreSQL during an outage. The probe now has its own `policy-store-probe` thread; `qa4ProbeDetectsOutageWhileSpringSchedulerIsBusy` reproduces the starvation (failed before, passes now); full suite 39/39; live script 4/4 (`EVIDENCE_REPORT.md` §10, ADR-003 Revision 2).
+- **Step 18 — C3 Pagination on `/mcp/tools` (2026-11-19, AI-Usage Log Case 27):**
+  - The last list endpoint without pagination now pages by name (`?page=&size=`, 50 by default); covered by `c3McpToolDiscoveryIsPaginated`; full suite 40/40.
 
 ## 2. Current State of the Application
-- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **39/39 passing** (`0` failures, `0` skipped) as of 2026-11-19.
+- Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **40/40 passing** (`0` failures, `0` skipped) as of 2026-11-19.
 - Live checks (`bash load-tests/run-live-qa.sh`, also run in CI) pass **QA1 (`100%`)**, **QA2 (`p(95) = 2 ms` overhead @ 100 RPS)**, **QA3 (`36,735/36,735` intact)**, **QA4 (real PostgreSQL outage drill)**; **QA5** (live OpenAPI import) and **C1** (`735.2 MiB` total stack RAM < `8 GB`) as of 2026-11-18.
 - Benchmark tip: close memory-heavy apps before QA2 (keep `>= 1.5 GB` host RAM free); see EVIDENCE_REPORT §7.
-- All evidence, ADRs, AI-Usage Log entries (Cases 1–26), and fixes are documented.
+- All evidence, ADRs, AI-Usage Log entries (Cases 1–27), and fixes are documented.
 
 ## 3. Immediate Next Steps for Next Session (TODOs)
 1. **Mid-Project Checkpoint Change Request (Requirement C10):** When the instructor issues the checkpoint change request, implement it as a new pluggable bean/module with zero edits to core orchestrators, and log touched files.

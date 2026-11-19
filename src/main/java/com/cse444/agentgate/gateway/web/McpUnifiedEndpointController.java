@@ -6,12 +6,15 @@ import com.cse444.agentgate.registry.service.ToolRegistryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +31,10 @@ import java.util.Map;
  * {@link com.cse444.agentgate.gateway.service.McpToolListSynchronizer}; the MCP SDK's {@code tools/list} is
  * server-wide, so there per-agent permission is enforced when the tool is called.
  * Lives in the gateway module because it combines the registry with the policy engine.
+ * <p>
+ * Paginated like every other list endpoint (C3): {@code ?page=&size=}, tools sorted by name; the page holds the
+ * tools under {@code tools} (the MCP name) plus {@code number}, {@code size}, {@code totalElements} and
+ * {@code totalPages}.
  */
 @RestController
 @RequestMapping("/mcp")
@@ -49,15 +56,28 @@ public class McpUnifiedEndpointController {
     }
 
     @GetMapping("/tools")
-    @Operation(summary = "Discover the healthy tools the calling agent is permitted to call (FR1, FR10)")
-    public Map<String, Object> listPermittedHealthyMcpTools(Authentication authentication) {
+    @Operation(summary = "Discover the healthy tools the calling agent is permitted to call, one page at a time (FR1, FR10, C3)")
+    public Map<String, Object> listPermittedHealthyMcpTools(
+            Authentication authentication,
+            @PageableDefault(size = 50) Pageable pageable
+    ) {
         String agentClientId = agentClientIdOf(authentication);
-        List<Map<String, Object>> mcpTools = toolRegistryService.listAvailableToolsForAgents().stream()
+        List<ToolResponse> permitted = toolRegistryService.listAvailableToolsForAgents().stream()
                 .filter(tool -> agentClientId == null
                         || policyEngineService.isToolPermittedForAgent(agentClientId, tool.name()))
-                .map(this::toMcpToolDescriptor)
+                .sorted(Comparator.comparing(ToolResponse::name))
                 .toList();
-        return Map.of("tools", mcpTools);
+        int size = pageable.getPageSize();
+        int from = (int) Math.min(pageable.getOffset(), permitted.size());
+        int to = Math.min(from + size, permitted.size());
+
+        Map<String, Object> page = new LinkedHashMap<>();
+        page.put("tools", permitted.subList(from, to).stream().map(this::toMcpToolDescriptor).toList());
+        page.put("number", pageable.getPageNumber());
+        page.put("size", size);
+        page.put("totalElements", permitted.size());
+        page.put("totalPages", (permitted.size() + size - 1) / size);
+        return page;
     }
 
     /**

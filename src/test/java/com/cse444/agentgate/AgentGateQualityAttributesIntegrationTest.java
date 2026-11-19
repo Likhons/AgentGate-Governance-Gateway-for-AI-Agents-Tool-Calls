@@ -1119,6 +1119,42 @@ class AgentGateQualityAttributesIntegrationTest {
     }
 
     @Test
+    @DisplayName("C3 Pagination: /mcp/tools pages through the permitted tools by name like every other list endpoint")
+    @SuppressWarnings("unchecked")
+    void c3McpToolDiscoveryIsPaginated() {
+        String basicAdmin = "Basic " + java.util.Base64.getEncoder()
+                .encodeToString("user:test-admin-pass".getBytes(StandardCharsets.UTF_8));
+        RestClient client = RestClient.create("http://localhost:" + serverPort);
+        List<String> allTools = discoveredToolNames(basicAdmin);
+        assertThat(allTools).hasSizeGreaterThanOrEqualTo(3).isSorted();
+
+        List<String> pagedTools = new java.util.ArrayList<>();
+        for (int page = 0; page < allTools.size(); page++) {
+            Map<String, Object> body = client.get()
+                    .uri("/mcp/tools?size=1&page=" + page)
+                    .header("Authorization", basicAdmin)
+                    .retrieve()
+                    .body(Map.class);
+            assertThat(body).isNotNull();
+            assertThat(body.get("number")).isEqualTo(page);
+            assertThat(body.get("size")).isEqualTo(1);
+            assertThat(body.get("totalElements")).isEqualTo(allTools.size());
+            assertThat(body.get("totalPages")).isEqualTo(allTools.size());
+            List<Map<String, Object>> tools = (List<Map<String, Object>>) body.get("tools");
+            assertThat(tools).hasSize(1);
+            pagedTools.add((String) tools.getFirst().get("name"));
+        }
+        assertThat(pagedTools).isEqualTo(allTools);
+
+        Map<String, Object> pastTheEnd = client.get()
+                .uri("/mcp/tools?size=1&page=" + allTools.size())
+                .header("Authorization", basicAdmin)
+                .retrieve()
+                .body(Map.class);
+        assertThat((List<Object>) pastTheEnd.get("tools")).isEmpty();
+    }
+
+    @Test
     @DisplayName("QA4 Real Outage: with PostgreSQL paused, LOW-risk calls keep working on cached state, MEDIUM/HIGH fail closed, audits catch up")
     void qa4RealDatabaseOutageKeepsLowRiskToolsWorkingAndFailsClosed() {
         // Warm the hot-path caches (agent, tools, limits, write cap) while the database is up
