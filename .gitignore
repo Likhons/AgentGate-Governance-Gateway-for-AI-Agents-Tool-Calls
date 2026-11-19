@@ -33,3 +33,6 @@ Thumbs.db
 .settings/
 .classpath
 .project
+
+# Course material from the instructor (kept locally, not published)
+CSE444_Course_Projects.docx
