@@ -54,4 +54,4 @@
 
 ## 3. Immediate Next Steps for Next Session (TODOs)
 1. **Mid-Project Checkpoint Change Request (Requirement C10):** When the instructor issues the checkpoint change request, implement it as a new pluggable bean/module with zero edits to core orchestrators, and log touched files.
-2. **Live Defence Preparation (Requirement C12):** Rehearse the 15-minute walkthrough of `ADR-001`–`ADR-005`, [EVIDENCE_REPORT.md](file:///e:/Assignment/docs/EVIDENCE_REPORT.md), and on-the-spot modification drill.
+2. **Live Defence Preparation (Requirement C12):** Rehearse with [DEFENCE_SCRIPT.md](file:///e:/Assignment/docs/DEFENCE_SCRIPT.md): the ADR-003 walkthrough with the live QA4 drill, cheat cards for the other ADRs, the verified on-the-spot change drills (new input guard, new output redaction, new policy operator) and the Q&A bank.
