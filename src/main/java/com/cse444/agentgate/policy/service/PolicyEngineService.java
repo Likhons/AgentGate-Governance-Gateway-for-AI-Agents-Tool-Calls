@@ -15,6 +15,7 @@ import com.cse444.agentgate.shared.domain.RiskLevel;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -32,6 +33,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -43,7 +45,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * - 10-second hot-reload into an atomic in-memory snapshot without restart (FR3, QA2)
  * - Dry-run mode logging what would have been blocked without blocking (FR3)
  * - Fail-safe availability: LOW-risk tools work from last known snapshot up to 5 minutes during
- *   policy store outage, while MEDIUM and HIGH-risk tools fail closed immediately (QA4)
+ *   policy store outage, while MEDIUM and HIGH-risk tools fail closed within seconds (QA4)
  * - Policy Playground for testing sample calls against current or draft rules (FR9)
  *
  * Design Patterns: Chain of Responsibility & Strategy Pattern.
@@ -66,6 +68,16 @@ public class PolicyEngineService {
     private final AtomicBoolean simulatedOutage = new AtomicBoolean(false);
     private final AtomicBoolean probeInFlight = new AtomicBoolean(false);
     private final ExecutorService probeExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    /**
+     * QA4: the policy-store probe has a timer thread of its own. On Spring's shared scheduler it waited behind
+     * the other @Scheduled tasks, which block on PostgreSQL for up to the 30 s socket timeout during an outage,
+     * so MEDIUM/HIGH-risk tools stayed open for up to ~30 s (CI run 44509718702, AI-usage log Case 26).
+     */
+    private final ScheduledExecutorService probeTimer = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "policy-store-probe");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     /**
      * @param conditionsUnreadable the stored conditions could not be read or are incomplete; a call that reaches
@@ -97,10 +109,33 @@ public class PolicyEngineService {
     }
 
     /**
-     * FR3: Load persisted active policies immediately on startup and refresh every 10 seconds
-     * into an atomic in-memory snapshot without requiring a restart.
+     * FR3, QA4: loads the active policies on startup, then starts the policy-store probe on its own timer thread.
      */
     @PostConstruct
+    void loadPoliciesAndStartProbe() {
+        refreshPolicySnapshot();
+        long intervalMillis = properties.policy().storeProbeInterval().toMillis();
+        probeTimer.scheduleWithFixedDelay(this::runProbe, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
+    }
+
+    @PreDestroy
+    void stopProbe() {
+        probeTimer.shutdownNow();
+    }
+
+    private void runProbe() {
+        try {
+            probePolicyStore();
+        } catch (Throwable ex) {
+            // A thrown exception would cancel every later run of scheduleWithFixedDelay and leave the last
+            // state in place; keep probing and fail closed instead
+            markPolicyStoreUnreachable("probe error: " + ex);
+        }
+    }
+
+    /**
+     * FR3: refreshes the active policies into an atomic in-memory snapshot every 10 seconds without a restart.
+     */
     @Scheduled(fixedDelayString = "${agentgate.policy.refresh-interval:10s}")
     public void refreshPolicySnapshot() {
         try {
@@ -119,11 +154,12 @@ public class PolicyEngineService {
 
     /**
      * QA4: Detects a policy store (PostgreSQL) outage within seconds, independently of the 10 s policy
-     * refresh, so MEDIUM/HIGH-risk tools fail closed promptly. The probe runs on a virtual thread and is
-     * bounded by {@code agentgate.policy.store-probe-timeout}, so a hung connection also counts as an outage.
+     * refresh, so MEDIUM/HIGH-risk tools fail closed promptly. Runs every
+     * {@code agentgate.policy.store-probe-interval} on the probe's own timer thread; the database call runs on a
+     * virtual thread bounded by {@code agentgate.policy.store-probe-timeout}, so a hung connection also counts as
+     * an outage and the timer thread is never held longer than that while the store counts as reachable.
      */
-    @Scheduled(fixedDelayString = "${agentgate.policy.store-probe-interval:2s}")
-    public void probePolicyStore() {
+    void probePolicyStore() {
         if (!probeInFlight.compareAndSet(false, true)) {
             markPolicyStoreUnreachable("previous probe is still waiting for the database");
             return;
@@ -138,6 +174,8 @@ public class PolicyEngineService {
         try {
             probe.get(properties.policy().storeProbeTimeout().toMillis(), TimeUnit.MILLISECONDS);
             if (!policyStoreReachable.get()) {
+                // Recovery: reload before reopening MEDIUM/HIGH-risk tools; while this waits, the store
+                // still counts as unreachable, so tools stay closed
                 refreshPolicySnapshot();
             }
         } catch (TimeoutException ex) {

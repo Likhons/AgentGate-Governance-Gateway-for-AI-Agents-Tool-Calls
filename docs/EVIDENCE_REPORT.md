@@ -778,3 +778,70 @@ PASS  qa3: "totalRecordsVerified":36735 intact
 - **Run conditions:** the host had only about `0.8 GB` of its `7.7 GB` RAM available during the run; container memory
   afterwards was `656.5 MiB` in total (`agentgate-app` `547.1 MiB`, `agentgate-postgres` `83.0 MiB`,
   `agentgate-redis` `15.8 MiB`, `agentgate-mock-downstream` `10.6 MiB`).
+
+## 10. Failed CI Run: QA4 Probe Starved by Spring's Scheduler (2026-11-19, Case 26)
+
+CI run `44509718702` (commit `5b374f9`) passed `build-and-verify` but failed the `live-quality-attributes` job, in
+the QA4 drill. Raw output from the job:
+```text
+== qa4: PostgreSQL outage drill (docker pause agentgate-postgres)
+policyStore health during the outage: UP
+PASS  qa4: LOW-risk call during the outage -> 200 EXECUTED in 5 ms
+FAIL  qa4: MEDIUM-risk call during the outage -> 200 EXECUTED (expected 409 fail closed)
+FAIL  qa4: HIGH-risk call during the outage -> 500 (expected 409 fail closed)
+PASS  qa4: the outage-time call was hash-chained after recovery (policyStore UP)
+```
+Gateway log from the same job (`docker compose logs agentgate`, message and thread only):
+```text
+10:56:57  DataSource health check failed                                              tomcat-handler-6214
+10:57:09  DataSource health check failed                                              tomcat-handler-6215
+10:57:21  DataSource health check failed                                              tomcat-handler-6216
+10:57:22  Health contributor ...DataSourceHealthIndicator (db) took 30002ms to respond  tomcat-handler-6213
+10:57:22  An I/O error occurred while sending to the backend.                         scheduling-2
+10:57:22  Unexpected error occurred in scheduled task                                 scheduling-2
+```
+No `Policy store unreachable` line appears during the outage.
+
+**Root cause.** The 2-second probe was a fixed-delay `@Scheduled` method on Spring's shared task scheduler, next to the
+database-bound fixed-delay tasks (policy refresh, approval timeout sweep, audit retry flush, MCP tool-list sync). When
+PostgreSQL was paused, one of those tasks waited on its socket for the 30-second socket timeout (`scheduling-2`, ended
+with an I/O error at 10:57:22) and the probe did not run in that time. The store therefore still counted as reachable:
+the `MEDIUM` refund ran on cached state, and the `HIGH` payout failed with `500` while creating its approval. Earlier
+local and CI runs had passed because the probe happened to run before a database task took the scheduler.
+
+**Reproduced, then fixed.** `qa4ProbeDetectsOutageWhileSpringSchedulerIsBusy` holds Spring's scheduler with a
+blocking fixed-delay task, pauses the PostgreSQL container and waits up to 8 s for the store to count as unreachable:
+
+| Code | Result |
+| :--- | :--- |
+| Before (probe on Spring's scheduler) | `AssertionError: Condition not met within PT8S` |
+| After (probe on its own `policy-store-probe` thread) | `QA4 outage detected in 3234 ms while Spring's scheduler was blocked`; `2448 ms` in the full suite (39/39) |
+
+**Live re-run** with the fix (`bash load-tests/run-live-qa.sh`, exit code `0`):
+```text
+== qa2: k6 load-tests/qa2_gateway_latency.k6.js
+PASS  qa2: k6 thresholds met
+    ✓ 'p(95)<30' p(95)=11ms
+    ✓ 'p(95)<40' p(95)=36.92ms
+    ✓ 'rate>=0.95' rate=100.00%
+== qa1: k6 load-tests/qa1_security_suite.k6.js
+PASS  qa1: k6 thresholds met
+    ✓ 'rate>=0.95' rate=100.00%
+    ✓ 'rate==1.0' rate=100.00%
+== qa4: PostgreSQL outage drill (docker pause agentgate-postgres)
+policyStore health during the outage: DOWN
+PASS  qa4: LOW-risk call during the outage -> 200 EXECUTED in 15 ms
+PASS  qa4: MEDIUM-risk call during the outage -> 409 fail closed
+PASS  qa4: HIGH-risk call during the outage -> 409 fail closed
+PASS  qa4: the outage-time call was hash-chained after recovery (policyStore UP)
+== qa3: audit hash chain verification
+PASS  qa3: "totalRecordsVerified":42984 intact
+== 0 failed check(s); results in build/live-qa/
+```
+The outage warning now comes from the probe's own thread:
+`Policy store unreachable (probe timed out after PT1.5S); MEDIUM/HIGH-risk tools fail closed ...` (`policy-store-probe`).
+
+- **Run conditions:** about `0.75 GB` of the host's `7.7 GB` RAM was free. The QA2 numbers (`p(95) = 11 ms` overhead,
+  `36.92 ms` HTTP against a `40 ms` threshold) are higher than the `1–2 ms` of earlier runs; both are within the limits,
+  and the cause was not investigated in this run. Container memory afterwards: `agentgate-app` `525.9 MiB`,
+  `agentgate-postgres` `76.2 MiB`, `agentgate-redis` `14.7 MiB`, `agentgate-mock-downstream` `10.9 MiB`.

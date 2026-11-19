@@ -49,6 +49,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -81,6 +83,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
@@ -127,6 +132,11 @@ class AgentGateQualityAttributesIntegrationTest {
 
     @Autowired
     private PolicyEngineService policyEngineService;
+
+    /** The scheduler that runs the application's @Scheduled methods. */
+    @Autowired
+    @Qualifier("taskScheduler")
+    private TaskScheduler taskScheduler;
 
     @Autowired
     private GuardPipelineService guardPipelineService;
@@ -1150,6 +1160,37 @@ class AgentGateQualityAttributesIntegrationTest {
         awaitTrue(Duration.ofSeconds(30), () -> !auditTrailService.searchAuditLogs(
                 null, "support-bot", "cust-qa4-outage", "lookup_order", "EXECUTED", null, PageRequest.of(0, 5)).isEmpty());
         assertThat(auditTrailService.verifyChainIntegrity().intact()).isTrue();
+    }
+
+    @Test
+    @DisplayName("QA4 Fail-Closed Timing: the policy-store probe detects an outage within seconds even while Spring's scheduler is busy")
+    void qa4ProbeDetectsOutageWhileSpringSchedulerIsBusy() throws InterruptedException {
+        // Stand-in for a database-bound @Scheduled task stuck on a socket read during an outage: in CI run
+        // 44509718702 such a task held Spring's scheduler for ~30 s and the probe never ran (AI-usage log Case 26)
+        CountDownLatch blockerStarted = new CountDownLatch(1);
+        CountDownLatch releaseBlocker = new CountDownLatch(1);
+        ScheduledFuture<?> blocker = taskScheduler.scheduleWithFixedDelay(() -> {
+            blockerStarted.countDown();
+            try {
+                releaseBlocker.await(60, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, Duration.ofHours(1));
+        DockerClient docker = postgres.getDockerClient();
+        try {
+            assertThat(blockerStarted.await(10, TimeUnit.SECONDS)).isTrue();
+            docker.pauseContainerCmd(postgres.getContainerId()).exec();
+            long startNanos = System.nanoTime();
+            awaitTrue(Duration.ofSeconds(8), () -> !policyEngineService.isPolicyStoreReachable());
+            System.out.printf("QA4 outage detected in %d ms while Spring's scheduler was blocked%n",
+                    (System.nanoTime() - startNanos) / 1_000_000);
+        } finally {
+            releaseBlocker.countDown();
+            blocker.cancel(false);
+            docker.unpauseContainerCmd(postgres.getContainerId()).exec();
+        }
+        awaitTrue(Duration.ofSeconds(30), policyEngineService::isPolicyStoreReachable);
     }
 
     @Test

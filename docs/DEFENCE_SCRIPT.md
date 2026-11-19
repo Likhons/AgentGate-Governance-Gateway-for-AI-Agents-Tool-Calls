@@ -15,7 +15,7 @@
 | সময় | অংশ | কী দেখাবেন |
 | :--- | :--- | :--- |
 | 0:00–1:00 | Opening | Problem আর pipeline, এক নিঃশ্বাসে |
-| 1:00–7:00 | ADR-003 walkthrough | Context → options → decision → **revision (Case 15)** → live QA4 drill (12 s) |
+| 1:00–7:00 | ADR-003 walkthrough | Context → options → decision → **revisions (Case 15, Case 26)** → live QA4 drill (12 s) |
 | 7:00–13:00 | On-the-spot change | sir-এর request → নতুন bean → test (≈45 s) → `git status`, দরকার হলে live call |
 | 13:00–15:00 | Buffer / প্রশ্ন | §6-এর উত্তরগুলো |
 
@@ -105,11 +105,11 @@ runs and what was changed") দুটো দাবিই এক গল্পে 
 
 | কী | কোথায় |
 | :--- | :--- |
-| Immutable snapshot একটা `AtomicReference`-এ, lock নেই | [PolicyEngineService.java:62-64](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L62-L64) |
-| Startup-এ আর প্রতি 10 s-এ reload (`@PostConstruct` + `@Scheduled`) | [PolicyEngineService.java:103-118](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L103-L118) |
-| API দিয়ে policy বদলালে সাথে সাথে refresh | [PolicyEngineService.java:201](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L201) |
-| Policy store probe: প্রতি 2 s, virtual thread-এ, 1.5 s পার হলে outage ধরা হয় | [PolicyEngineService.java:125-151](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L125-L151) |
-| Risk-tiered fail-safe: MEDIUM/HIGH deny, LOW চলবে snapshot-এর বয়স 5 মিনিট পর্যন্ত | [PolicyEngineService.java:223-262](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L223-L262) |
+| Immutable snapshot একটা `AtomicReference`-এ, lock নেই | [PolicyEngineService.java:64-66](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L64-L66) |
+| Startup-এ load করে probe নিজের thread-এ চালু (`@PostConstruct`), আর প্রতি 10 s-এ reload (`@Scheduled`) | [PolicyEngineService.java:112-134](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L112-L134), [PolicyEngineService.java:137-153](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L137-L153) |
+| API দিয়ে policy বদলালে সাথে সাথে refresh | [PolicyEngineService.java:239](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L239) |
+| Policy store probe: নিজস্ব `policy-store-probe` thread-এ প্রতি 2 s চলে। DB call যায় virtual thread-এ, আর 1.5 s পার হলে outage ধরা হয় | [PolicyEngineService.java:71-80](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L71-L80), [PolicyEngineService.java:155-189](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L155-L189) |
+| Risk-tiered fail-safe: MEDIUM/HIGH deny, LOW চলবে snapshot-এর বয়স 5 মিনিট পর্যন্ত | [PolicyEngineService.java:261-300](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L261-L300) |
 | Agent, tool আর limit-এর last-known-good cache (Caffeine, refresh 10 s, expire 5 m) | [FailSafeCaches.java:29-41](../src/main/java/com/cse444/agentgate/shared/util/FailSafeCaches.java#L29-L41) |
 | Hikari 2 s connection timeout, 30 s socket timeout, probe-এর config | [application.yml:34-42](../src/main/resources/application.yml#L34-L42), [application.yml:95-101](../src/main/resources/application.yml#L95-L101) |
 
@@ -131,6 +131,17 @@ runs and what was changed") দুটো দাবিই এক গল্পে 
 > 2-second probe, and an in-order audit retry queue so outage-time calls are still hash-chained afterwards."
 
 এটা ADR-এর *Revision (2026-11-19)* অংশে লেখা আছে। পুরো ঘটনা [QUICKSTART.md](QUICKSTART.md)-এর AI-usage log-এ (Case 15)।
+
+**দ্বিতীয় revision, Case 26 (৩০ সেকেন্ড):**
+> "CI then caught a second problem. The probe was an ordinary `@Scheduled` method on Spring's shared scheduler.
+> In one CI run, a database-bound scheduled task waited thirty seconds on its socket during the outage, the probe
+> never ran, and a medium-risk refund went through. We reproduced it with a test that keeps Spring's scheduler
+> busy and pauses PostgreSQL: the old code missed the outage for the full eight seconds. The probe now has its
+> own timer thread and detects the outage in about three seconds even with the scheduler blocked. The rule we
+> took from it: the check that enforces fail-closed must not share a thread with work that blocks on the store
+> it checks."
+
+Fail হওয়া CI run-এর raw output, গোড়ার কারণ আর আগে-পরের test-এর ফল [EVIDENCE_REPORT.md](EVIDENCE_REPORT.md)-এর §10-এ আছে। এটা C9 ("failed runs and what was changed")-এর সরাসরি প্রমাণ।
 
 ### 3.5 Live প্রমাণ (১ মিনিট)
 
@@ -161,18 +172,19 @@ Script-টা নিজেই unpause করে, আর কোনো কার�
 ### 3.6 Trade-off আর sensitivity point (৩০ সেকেন্ড)
 
 - **Trade-off:** MEDIUM/HIGH-এর জন্য consistency (CP), আর LOW-এর জন্য availability (AP), তবে staleness সর্বোচ্চ ৫ মিনিট। এর বেশি নয়।
-- **Sensitivity:** probe interval আর timeout (2 s / 1.5 s)। ছোট করলে GC pause বা বেশি load-এর সময় ভুয়া outage ধরা পড়বে, ফলে MEDIUM call অকারণে deny হবে। বড় করলে outage ধরতে দেরি হবে।
+- **Sensitivity:** probe interval আর timeout (2 s / 1.5 s)। ছোট করলে GC pause বা বেশি load-এর সময় ভুয়া outage ধরা পড়বে, ফলে MEDIUM call অকারণে deny হবে। বড় করলে outage ধরতে দেরি হবে। আরেকটা sensitivity point হলো probe কোন thread-এ চলে: shared scheduler-এ থাকলে detection 30 s পর্যন্ত পিছিয়ে যেতে পারে (Case 26)।
 - **Trade-off:** এই instance-এর বাইরে থেকে agent, tool বা limit বদলালে তা কার্যকর হতে 10 s পর্যন্ত লাগতে পারে। তবে এই instance-এর kill switch সাথে সাথে কাজ করে।
 
 ### 3.7 ADR-003 নিয়ে সম্ভাব্য প্রশ্ন
 
 | প্রশ্ন | উত্তর |
 | :--- | :--- |
-| Outage-এর শুরুর কয়েক সেকেন্ডে MEDIUM call-এর কী হয়? | Probe ধরার আগ পর্যন্ত, অর্থাৎ সর্বোচ্চ ≈ 2 s interval + 1.5 s timeout, MEDIUM call cached state-এ evaluate হতে পারে। এটা জানা ও সীমাবদ্ধ একটা window। ছোট করতে চাইলে probe interval কমাতে হবে (sensitivity point)। |
+| Outage-এর শুরুর কয়েক সেকেন্ডে MEDIUM call-এর কী হয়? | Probe ধরার আগ পর্যন্ত, অর্থাৎ সর্বোচ্চ ≈ 2 s interval + 1.5 s timeout, MEDIUM call cached state-এ evaluate হতে পারে। এটা জানা ও সীমাবদ্ধ একটা window। ছোট করতে চাইলে probe interval কমাতে হবে (sensitivity point)। Probe নিজের thread-এ চলে, তাই অন্য কোনো scheduled task আটকে থাকলেও এই window বড় হয় না (Case 26)। |
+| Probe আলাদা thread-এ কেন, `@Scheduled` কেন নয়? | `@Scheduled` task-গুলো Spring-এর shared scheduler-এ চলে। Outage-এর সময় DB-নির্ভর task (refresh, approval sweep, audit flush, MCP sync) socket-এ 30 s পর্যন্ত আটকে থাকে, তখন probe চলতেই পারে না। CI run `44509718702`-এ ঠিক এটাই হয়েছিল। এখন test দিয়ে প্রমাণ করা: scheduler আটকে থাকা অবস্থাতেও probe ≈ 3 s-এ outage ধরে। |
 | 5:01 মিনিটে কী হয়? | Snapshot-এর বয়স TTL পার হলে LOW call `QA4_FAIL_CLOSED_CACHE_TTL_EXPIRED` দিয়ে deny হয়। Cache-গুলোও `expireAfterWrite(5m)`-এ মেয়াদ হারায়, তাই সবকিছু fail closed হয়ে যায়। |
 | Policy cache Redis-এ রাখলেন না কেন? | তাহলে hot path-এ আরেকটা network hop যোগ হতো। তার ওপর Redis নিজেও down হতে পারে। QA4-এর প্রশ্নটাই হলো store down থাকলে কী হবে, remote cache রাখলে সমস্যাটা শুধু জায়গা বদলায়। |
 | PostgreSQL `LISTEN/NOTIFY` দিয়ে instant reload করলেন না কেন? | FR3 10 s সময় দেয়, আর API দিয়ে করা write-এ এমনিতেই সাথে সাথে refresh হয়। NOTIFY-এর জন্য আলাদা একটা স্থায়ী connection লাগত, আর outage-এর সময় সেটা কোনো কাজেও আসে না। |
-| `simulatedOutage` flag আলাদা কেন? | Drill আর test-এর জন্য। Probe চলতে থাকলেও যেন drill-কে বাতিল করে দিতে না পারে ([PolicyEngineService.java:65-66](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L65-L66))। |
+| `simulatedOutage` flag আলাদা কেন? | Drill আর test-এর জন্য। Probe চলতে থাকলেও যেন drill-কে বাতিল করে দিতে না পারে ([PolicyEngineService.java:67-68](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L67-L68))। |
 | Multi-instance হলে? | প্রতিটা instance-এর নিজস্ব snapshot থাকে। অন্য instance-এর বদল 10 s-এর মধ্যে আসে। ADR-এ trade-off হিসেবে লেখা আছে। |
 
 ---
@@ -492,11 +504,11 @@ docker compose up -d --build --wait agentgate   # live container আবার ma
 | Policy deny-তে 403 না দিয়ে 409 কেন? | Gateway deny-কে `IllegalStateException` হিসেবে ছুড়ে দেয়, যেটা "Operation Blocked by Governance State" (409)-এ map হয়। Body-তে কারণ আর rule-এর নাম থাকে। এটা জানা একটা উন্নতির জায়গা: আলাদা exception দিলে 403 পাওয়া যাবে (§5.7)। Downstream timeout-ও এখন 409 দেয়, অথচ সেখানে 504 বেশি মানানসই। |
 | Strategy pattern বলছেন, কিন্তু এটা তো `switch`? | এটা enum দিয়ে dispatch করা strategy। Switch exhaustive, তাই নতুন operator যোগ করলে compiler নিজেই case চায়। পুরোপুরি OCP চাইলে `Map<Operator, ConditionStrategy>` bean লাগবে। কিন্তু 9টা ছোট operator-এর জন্য ততটা indirection বাড়ানো লাভজনক মনে হয়নি। এটাই trade-off। |
 | Rate limit policy-র আগে কেন? | Flood থামাতে। Prompt-injected agent বারবার deny হওয়ার মতো call পাঠালেও throttle হয়, আর FR6 alert ওঠে। এর মূল্য হলো deny হওয়া call-ও quota খরচ করে। |
-| DB-তে কোনো policy-র `conditions_json` নষ্ট হলে কী হবে? | **Fail closed** ([PolicyEngineService.java:462-491](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L462-L491))। যে call ওই rule পর্যন্ত পৌঁছায় তা deny হয়, কারণে লেখা থাকে "has unreadable conditions"। সাথে একটা ERROR log ওঠে, আর tool-টা `/mcp/tools`-এ দেখায় না। Dry-run DENY rule তখনও block করে না। আর API এখন অসম্পূর্ণ শর্ত সরাসরি 400 দিয়ে ফেরত দেয় (Case 22), তাই এমন rule এখন শুধু সরাসরি DB edit-এর মাধ্যমেই তৈরি হতে পারে। আগে এটা fail-open ছিল: খালি list ফেরত আসত, ফলে 2,000 BDT-এর সীমা উঠে যেত। Defence-এর প্রস্তুতির সময় এটা ধরা পড়ে, আর ঠিক করার আগে test-টা পুরোনো code-এ fail করে প্রমাণ করেছে (AI-usage log Case 21)। এটা একটা ভালো C11 গল্প। |
+| DB-তে কোনো policy-র `conditions_json` নষ্ট হলে কী হবে? | **Fail closed** ([PolicyEngineService.java:500-529](../src/main/java/com/cse444/agentgate/policy/service/PolicyEngineService.java#L500-L529))। যে call ওই rule পর্যন্ত পৌঁছায় তা deny হয়, কারণে লেখা থাকে "has unreadable conditions"। সাথে একটা ERROR log ওঠে, আর tool-টা `/mcp/tools`-এ দেখায় না। Dry-run DENY rule তখনও block করে না। আর API এখন অসম্পূর্ণ শর্ত সরাসরি 400 দিয়ে ফেরত দেয় (Case 22), তাই এমন rule এখন শুধু সরাসরি DB edit-এর মাধ্যমেই তৈরি হতে পারে। আগে এটা fail-open ছিল: খালি list ফেরত আসত, ফলে 2,000 BDT-এর সীমা উঠে যেত। Defence-এর প্রস্তুতির সময় এটা ধরা পড়ে, আর ঠিক করার আগে test-টা পুরোনো code-এ fail করে প্রমাণ করেছে (AI-usage log Case 21)। এটা একটা ভালো C11 গল্প। |
 | কেউ audit-এর **শেষ** row মুছে দিলে? | বাকি chain তখনও ঠিক দেখায়। মাঝখান থেকে মুছলে বা কিছু বদলালে ধরা পড়ে, কিন্তু শেষ অংশ ছেঁটে ফেললে hash chain একা সেটা ধরতে পারে না। সমাধান: chain-এর মাথার hash সময়ে সময়ে বাইরে কোথাও রাখা (log, WORM storage)। |
 | QA2-তে শুধু gateway-র সময় মাপছেন, downstream বাদ দিয়ে, কীভাবে নিশ্চিত হলেন? | `agentgate.gateway.overhead` metric মোট সময় থেকে downstream-এর nanos বাদ দিয়ে হিসাব করে ([GatewayOrchestrationService.java:218-228](../src/main/java/com/cse444/agentgate/gateway/service/GatewayOrchestrationService.java#L218-L228))। k6-এ HTTP p95 আলাদাভাবে রিপোর্ট করা হয়। |
 | Spring Statemachine না নিয়ে sealed interface কেন? | ছয়টা state (`PENDING` থেকে পাঁচটা terminal: `APPROVED`, `APPROVED_EDITED`, `REJECTED`, `TIMED_OUT`, `CANCELLED_BY_KILL_SWITCH`) আর একটাই উৎস, তাই sealed `ApprovalLifecycleState`-এর compile-time check-ই যথেষ্ট। কোনো বাড়তি dependency বা config লাগে না। Kill switch, timeout আর মানুষের approve একসাথে ঘটলেও terminal state আর বদলায় না (`GuardAndStatePatternUnitTest`)। |
-| AI কতটা লিখেছে, আর আপনি কীভাবে যাচাই করেছেন? | C11 log-এ Cases 1–22 আছে, তার মধ্যে AI-এর অনেকগুলো ভুল output (যেমন Case 15, 21 আর 22)। প্রতিটা fix আলাদা commit-এ, full suite (38/38) আর CI পাস করে তবেই। |
+| AI কতটা লিখেছে, আর আপনি কীভাবে যাচাই করেছেন? | C11 log-এ Cases 1–26 আছে, তার মধ্যে AI-এর অনেকগুলো ভুল output (যেমন Case 15, 21, 22 আর 26)। প্রতিটা fix আলাদা commit-এ, full suite (39/39) আর CI পাস করে তবেই। |
 
 ---
 
