@@ -8,12 +8,15 @@
 #        MEDIUM/HIGH-risk calls fail closed, and calls made during the outage
 #        are hash-chained in the audit trail once the database is back
 #   qa3  the audit hash chain verifies intact
+#   qa5  the quick-start onboarding with no code changes: import a new REST
+#        service (Invoice API) from OpenAPI as a LOW-risk tool, add a policy,
+#        call it through the gateway, see it on /mcp/tools; timed (< 10 min)
 #
 # Start the stack first:   docker compose --profile benchmark up -d --build --wait
 # Run every check:         bash load-tests/run-live-qa.sh
 # Run some checks:         bash load-tests/run-live-qa.sh qa1 qa3
 # qa4 uses the tools and policies that the qa1 suite registers, so run qa1 first
-# on a fresh stack. Admin credentials come from .env (AGENTGATE_ADMIN_USERNAME /
+# on a fresh stack; qa5 registers the demo agent itself if it is missing. Admin credentials come from .env (AGENTGATE_ADMIN_USERNAME /
 # AGENTGATE_ADMIN_PASSWORD) or the ADMIN_USER / ADMIN_PASS environment variables.
 # Output is written to build/live-qa/. Exits non-zero if any check fails.
 # =============================================================================
@@ -28,6 +31,8 @@ DB_CONTAINER="${DB_CONTAINER:-agentgate-postgres}"
 # Demo agent registered by the setup() of both k6 suites
 AGENT_ID="support-bot"
 AGENT_SECRET="support-secret-2026"
+# The benchmark mock downstream as the gateway container reaches it
+DOWNSTREAM_URL="${DOWNSTREAM_URL:-http://mock-downstream:8081}"
 
 env_value() { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true; }
 ADMIN_USER="${ADMIN_USER:-$(env_value AGENTGATE_ADMIN_USERNAME)}"
@@ -142,12 +147,65 @@ qa4() {
   fi
 }
 
+# QA5: the steps of docs/QUICKSTART.md Part 1 with curl and no code changes. A person's first run is the
+# measure (a classmate, docs/QA5_TRIAL.md); this check proves the documented path works and times it.
+qa5() {
+  echo "== qa5: put a new REST tool behind the gateway (OpenAPI import, risk level, policy), no code changes"
+  local start import import_status policy_status token call listed elapsed problems=""
+  # The quick start's demo agent; registering it again when it already exists is harmless
+  curl -s -o /dev/null --max-time 10 -u "$ADMIN_USER:$ADMIN_PASS" -H 'Content-Type: application/json' \
+    -X POST "$BASE_URL/api/v1/agents" -d "{\"clientId\":\"$AGENT_ID\",\"clientSecret\":\"$AGENT_SECRET\",\
+\"agentName\":\"Customer Support Agent\",\"owningTeam\":\"SupportOps\",\"clearanceLevel\":\"NONE\",\
+\"scopes\":\"mcp:invoke\"}" || true
+
+  start=$SECONDS
+  # Steps 1 and 2: import the Invoice API from its OpenAPI spec as a LOW-risk tool (FR1)
+  import="$(curl -s -w '\n%{http_code}' --max-time 30 -u "$ADMIN_USER:$ADMIN_PASS" \
+    -H 'Content-Type: application/json' -X POST "$BASE_URL/api/v1/tools/import-openapi" -d @- <<JSON
+{"owningTeam": "BillingTeam", "defaultRiskLevel": "LOW", "baseUrlOverride": "$DOWNSTREAM_URL",
+ "defaultTimeoutMs": 2000, "approvalWebhookUrl": null,
+ "openApiContent": "openapi: 3.0.3\ninfo:\n  title: Invoice API\n  version: 1.0.0\npaths:\n  /invoices/{invoiceId}:\n    get:\n      operationId: qa5_get_invoice\n      summary: Look up one invoice\n      parameters:\n        - name: invoiceId\n          in: path\n          required: true\n          schema:\n            type: string\n      responses:\n        \"200\":\n          description: OK"}
+JSON
+)"
+  import_status="${import##*$'\n'}"
+  # Here-strings, not "echo | grep -q": with pipefail an early grep exit could fail the pipe
+  [[ "$import_status" == 2?? ]] && grep -q '"name":"qa5_get_invoice"' <<< "$import" \
+    && grep -q '"riskLevel":"LOW"' <<< "$import" || problems="$problems import=$import_status"
+
+  # Step 3: allow the agent to call the new tool for invoice ids only (FR3, takes effect immediately)
+  policy_status="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -u "$ADMIN_USER:$ADMIN_PASS" \
+    -H 'Content-Type: application/json' -X POST "$BASE_URL/api/v1/policies" \
+    -d '{"ruleName":"allow-support-bot-qa5-get-invoice","priority":40,"agentPattern":"support-bot","toolPattern":"qa5_get_invoice","effect":"ALLOW","dryRun":false,"conditions":[{"field":"invoiceId","operator":"REGEX","expectedValue":"^INV-[0-9-]+$"}],"description":"QA5: let the support bot look up invoices"}')"
+  [ "$policy_status" = "201" ] || problems="$problems policy=$policy_status"
+
+  # The agent calls the new tool through the gateway with its own token (FR2), and sees it on /mcp/tools (FR1)
+  token="$(agent_token cust-qa5)"
+  call="$(curl -s --max-time 15 -X POST "$BASE_URL/api/v1/gateway/call" -H "Authorization: Bearer $token" \
+    -H 'Content-Type: application/json' -d '{"toolName":"qa5_get_invoice","arguments":{"invoiceId":"INV-2026-001"}}')"
+  elapsed=$((SECONDS - start))
+  listed="$(curl -s --max-time 10 -H "Authorization: Bearer $token" "$BASE_URL/mcp/tools?size=100")"
+  { echo "import: $import"; echo "policy: $policy_status"; echo "call: $call"; echo "elapsed: ${elapsed}s"; } \
+    > "$RESULTS_DIR/qa5.txt"
+
+  grep -q '"outcome":"EXECUTED"' <<< "$call" || problems="$problems call=${call:0:200}"
+  # The guards apply to the new tool with no extra work: the invoice's e-mail is redacted for this agent (FR5)
+  grep -q 'REDACTED_EMAIL' <<< "$call" || problems="$problems e-mail-not-redacted"
+  grep -q '"name":"qa5_get_invoice"' <<< "$listed" || problems="$problems not-on-/mcp/tools"
+  [ "$elapsed" -lt 600 ] || problems="$problems took-${elapsed}s"
+
+  if [ -z "$problems" ]; then
+    pass "qa5: import (LOW risk) + policy + governed call in ${elapsed} s with no code changes (limit 600 s)"
+  else
+    fail "qa5:$problems (see $RESULTS_DIR/qa5.txt)"
+  fi
+}
+
 checks=("$@")
-[ ${#checks[@]} -gt 0 ] || checks=(qa2 qa1 qa4 qa3)
+[ ${#checks[@]} -gt 0 ] || checks=(qa2 qa1 qa4 qa3 qa5)
 for check in "${checks[@]}"; do
   case "$check" in
-    qa1|qa2|qa3|qa4) "$check" ;;
-    *) echo "Unknown check '$check' (use qa1, qa2, qa3, qa4)" >&2; exit 2 ;;
+    qa1|qa2|qa3|qa4|qa5) "$check" ;;
+    *) echo "Unknown check '$check' (use qa1, qa2, qa3, qa4, qa5)" >&2; exit 2 ;;
   esac
 done
 

@@ -514,7 +514,7 @@ docker compose up -d --build --wait agentgate   # live container আবার ma
 
 ## 7. কিছু ভেঙে গেলে (fallback)
 
-- Docker বা app ভেঙে গেলে: CI-এর green run দেখান (`live-quality-attributes` job-এ QA1–QA4 live চলে), [EVIDENCE_REPORT.md](EVIDENCE_REPORT.md)-এর §8/§9-এর raw output দেখান, আর শুধু unit test চালিয়ে change প্রমাণ করুন। Unit test-এর জন্য app লাগে না।
+- Docker বা app ভেঙে গেলে: CI-এর green run দেখান (`live-quality-attributes` job-এ QA1–QA5 live চলে), [EVIDENCE_REPORT.md](EVIDENCE_REPORT.md)-এর §8/§9-এর raw output দেখান, আর শুধু unit test চালিয়ে change প্রমাণ করুন। Unit test-এর জন্য app লাগে না।
 - `lookup_order` থেকে 409 timeout আসছে? তাহলে `mock-downstream` চলছে না: `docker compose --profile benchmark up -d --wait`
 - RAM শেষ হয়ে আসছে? Gradle চালানোর আগে `docker stop agentgate-app`, পরে `docker start agentgate-app`।
 - QA4 drill মাঝপথে থেমে গেছে? `docker unpause agentgate-postgres`

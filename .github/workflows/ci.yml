@@ -66,7 +66,7 @@ jobs:
       - name: Start the stack (C1, docker profile) with the benchmark mock downstream
         run: docker compose --profile benchmark up -d --build --wait --wait-timeout 300
 
-      - name: QA2 (k6 latency), QA1 (k6 red team), QA4 (PostgreSQL outage drill), QA3 (audit verify)
+      - name: QA2 (k6 latency), QA1 (k6 red team), QA4 (PostgreSQL outage drill), QA3 (audit verify), QA5 (tool onboarding)
         run: bash load-tests/run-live-qa.sh
 
       - name: Upload live QA results

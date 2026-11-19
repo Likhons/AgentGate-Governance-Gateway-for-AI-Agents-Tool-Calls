@@ -845,3 +845,42 @@ The outage warning now comes from the probe's own thread:
   `36.92 ms` HTTP against a `40 ms` threshold) are higher than the `1–2 ms` of earlier runs; both are within the limits,
   and the cause was not investigated in this run. Container memory afterwards: `agentgate-app` `525.9 MiB`,
   `agentgate-postgres` `76.2 MiB`, `agentgate-redis` `14.7 MiB`, `agentgate-mock-downstream` `10.9 MiB`.
+
+## 11. QA5 as a Live Check, All Five Quality Attributes in One Run (2026-11-19, Case 29)
+
+`run-live-qa.sh qa5` follows Part 1 of `docs/QUICKSTART.md` with curl against the running stack and no code changes:
+import a new Invoice API (benchmark mock, `GET /invoices/{invoiceId}`) from its OpenAPI spec as a `LOW`-risk tool, add an
+ALLOW policy with a `REGEX` condition on `invoiceId`, get an agent token, call the tool through the gateway, check that
+the e-mail in the result is redacted (FR5) and that the tool is listed on `/mcp/tools` (FR1), and time the steps against
+the 10-minute limit. It measures the documented path; the person-based measure (a classmate who has not seen the code)
+is the trial in `docs/QA5_TRIAL.md`.
+
+The first local run failed on the check itself, not on the gateway: the script expected `200` from the import, which
+answers `201 Created` (`FAIL  qa5: import=201`); every other step had passed. After accepting any `2xx`, the full script
+(`bash load-tests/run-live-qa.sh`, exit code `0`, the same command CI runs) passed all five checks:
+```text
+== qa2: k6 load-tests/qa2_gateway_latency.k6.js
+PASS  qa2: k6 thresholds met
+    ✓ 'p(95)<30' p(95)=5ms
+    ✓ 'p(95)<40' p(95)=21.93ms
+    ✓ 'rate>=0.95' rate=100.00%
+== qa1: k6 load-tests/qa1_security_suite.k6.js
+PASS  qa1: k6 thresholds met
+    ✓ 'rate>=0.95' rate=100.00%
+    ✓ 'rate==1.0' rate=100.00%
+== qa4: PostgreSQL outage drill (docker pause agentgate-postgres)
+policyStore health during the outage: DOWN
+PASS  qa4: LOW-risk call during the outage -> 200 EXECUTED in 12 ms
+PASS  qa4: MEDIUM-risk call during the outage -> 409 fail closed
+PASS  qa4: HIGH-risk call during the outage -> 409 fail closed
+PASS  qa4: the outage-time call was hash-chained after recovery (policyStore UP)
+== qa3: audit hash chain verification
+PASS  qa3: "totalRecordsVerified":49227 intact
+== qa5: put a new REST tool behind the gateway (OpenAPI import, risk level, policy), no code changes
+PASS  qa5: import (LOW risk) + policy + governed call in 1 s with no code changes (limit 600 s)
+== 0 failed check(s); results in build/live-qa/
+```
+The governed call's result, with the customer's e-mail redacted for the `NONE`-clearance support bot:
+```text
+{"invoiceId":"INV-2026-001","customerEmail":"[REDACTED_EMAIL]","amount":1250,"currency":"BDT","status":"PAID"}
+```

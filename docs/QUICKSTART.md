@@ -113,7 +113,7 @@ other list endpoint (`?page=0&size=50` by default; the reply carries `tools`, `n
 ### Optional: Run the Live Quality-Attribute Checks (C5)
 ```bash
 docker compose --profile benchmark up -d --wait   # adds the nginx mock downstream used by the k6 suites
-bash load-tests/run-live-qa.sh                    # QA2 + QA1 (k6), QA4 PostgreSQL outage drill, QA3 verify
+bash load-tests/run-live-qa.sh                    # QA2 + QA1 (k6), QA4 outage drill, QA3 verify, QA5 onboarding
 ```
 The QA4 drill pauses the `agentgate-postgres` container for a few seconds and unpauses it again.
 
@@ -218,3 +218,6 @@ The QA4 drill pauses the `agentgate-postgres` container for a few seconds and un
 28. **Case 28 — The Quick Start Needed `jq`, Which Git Bash on Windows Does Not Ship (`QA5`):**
     - *Issue Found:* While preparing the QA5 classmate trial on the project laptop, the token step of Part 1 piped the reply through `jq -r .access_token`; Git Bash on Windows has no `jq`, so `TOKEN` stayed empty and every following call would have failed with `401`, costing a new developer time that QA5 measures.
     - *Fix Applied:* The token step extracts `access_token` with `sed`, which Git Bash, Linux and macOS all have, and prints the start of the token so a failed request is noticed at once; checked on the laptop (token issued, gateway call `200`). The trial itself is prepared in `docs/QA5_TRIAL.md`: host checklist, the developer's task card (import a new Invoice API as a LOW-risk tool, write a policy, call it as the agent) and a result form for `EVIDENCE_REPORT.md`.
+29. **Case 29 — QA5 Was Not a Runnable Quality-Attribute Check (`C5`, `QA5`):**
+    - *Issue Found:* C5 asks for every quality-attribute measure as a runnable script that CI runs. The live script covered QA1–QA4; QA5 (a new REST tool behind the gateway with no code changes) was only part of a Testcontainers test, so the documented quick-start path itself was never run against the live stack.
+    - *Fix Applied:* `run-live-qa.sh qa5` follows Part 1 of this guide with curl against the running stack: it imports a new Invoice API (served by the benchmark mock at `/invoices/{invoiceId}`) from its OpenAPI spec as a `LOW`-risk tool, adds an ALLOW policy with a `REGEX` condition, calls the tool through the gateway with an agent token, checks that the e-mail in the result is redacted (FR5) and that the tool is listed on `/mcp/tools` (FR1), and times the steps against the 10-minute limit. CI runs it with the other checks; the local run passed 5/5 (`EVIDENCE_REPORT.md` §11). The person-based measure (a classmate who has not seen the code) is the trial in `docs/QA5_TRIAL.md`.

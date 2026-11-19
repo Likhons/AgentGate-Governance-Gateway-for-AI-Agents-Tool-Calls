@@ -59,12 +59,14 @@
   - The last list endpoint without pagination now pages by name (`?page=&size=`, 50 by default); covered by `c3McpToolDiscoveryIsPaginated`; full suite 40/40.
 - **Step 19 — QA5 Classmate Trial Prepared (2026-11-19, AI-Usage Log Case 28):**
   - `docs/QA5_TRIAL.md` holds the host checklist, the developer's task card and the result form; the quick start's token step no longer needs `jq` (missing from Git Bash on Windows).
+- **Step 20 — QA5 as a Live Check (2026-11-19, AI-Usage Log Case 29):**
+  - `run-live-qa.sh qa5` runs the quick-start onboarding (OpenAPI import as a LOW-risk tool, policy, governed call, `/mcp/tools`) against the live stack with no code changes and times it; CI runs all five checks; local run 5/5 (`EVIDENCE_REPORT.md` §11).
 
 ## 2. Current State of the Application
 - Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **40/40 passing** (`0` failures, `0` skipped) as of 2026-11-19.
-- Live checks (`bash load-tests/run-live-qa.sh`, also run in CI) pass **QA1 (`100%`)**, **QA2 (`p(95) = 2 ms` overhead @ 100 RPS)**, **QA3 (`36,735/36,735` intact)**, **QA4 (real PostgreSQL outage drill)**; **QA5** (live OpenAPI import) and **C1** (`735.2 MiB` total stack RAM < `8 GB`) as of 2026-11-18.
+- Live checks (`bash load-tests/run-live-qa.sh`, also run in CI) pass all five as of 2026-11-19: **QA2** (`p(95) = 5 ms` overhead @ 100 RPS), **QA1** (`100%`), **QA4** (real PostgreSQL outage drill), **QA3** (`49,227` records intact) and **QA5** (scripted onboarding in `1 s`, limit 10 min); **C1** `735.2 MiB` total stack RAM < `8 GB` (2026-11-18). The person-based QA5 trial (a classmate) is still to be run with `docs/QA5_TRIAL.md`.
 - Benchmark tip: close memory-heavy apps before QA2 (keep `>= 1.5 GB` host RAM free); see EVIDENCE_REPORT §7.
-- All evidence, ADRs, AI-Usage Log entries (Cases 1–28), and fixes are documented.
+- All evidence, ADRs, AI-Usage Log entries (Cases 1–29), and fixes are documented.
 
 ## 3. Immediate Next Steps for Next Session (TODOs)
 1. **Mid-Project Checkpoint Change Request (Requirement C10):** When the instructor issues the checkpoint change request, implement it as a new pluggable bean/module with zero edits to core orchestrators, and log touched files.
