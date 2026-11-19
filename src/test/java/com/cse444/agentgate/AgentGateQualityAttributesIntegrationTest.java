@@ -752,21 +752,37 @@ class AgentGateQualityAttributesIntegrationTest {
     @Test
     @DisplayName("QA3 Auditability & FR7 CSV Export: Auditor searches, exports CSV, and detects row tampering")
     void qa3AuditTrailDetectsTampering() {
-        gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
+        GatewayToolCallResponse heldCall = gatewayService.processToolCall("support-bot", new GatewayToolCallRequest(
                 "bulk_payout",
                 Map.of("recipient", "merchant-dhaka-01712345678", "amount", 15000),
                 "cust-888"
         ));
 
         Page<AuditLogResponse> found = auditTrailService.searchAuditLogs(
-                "support-bot", "cust-888", "bulk_payout", null, null, PageRequest.of(0, 10));
+                null, "support-bot", "cust-888", "bulk_payout", null, null, PageRequest.of(0, 10));
         assertThat(found.getContent()).isNotEmpty();
         AuditLogResponse latestLog = found.getContent().getFirst();
         assertThat(latestLog.policyRuleName()).isEqualTo("allow-high-risk-payout-with-human-approval");
         assertThat(latestLog.redactedArgumentsJson()).contains("[REDACTED_BD_PHONE]");
 
-        String csv = auditTrailService.exportAuditLogsAsCsv("support-bot", "cust-888", "bulk_payout", null);
+        // QA3: the callId the agent received finds exactly that call's record
+        Page<AuditLogResponse> byCallId = auditTrailService.searchAuditLogs(
+                heldCall.callId(), null, null, null, null, null, PageRequest.of(0, 10));
+        assertThat(byCallId.getTotalElements()).isEqualTo(1);
+        assertThat(byCallId.getContent().getFirst().id()).isEqualTo(heldCall.callId());
+        assertThat(byCallId.getContent().getFirst().delegatedUserId()).isEqualTo("cust-888");
+
+        String csv = auditTrailService.exportAuditLogsAsCsv(null, "support-bot", "cust-888", "bulk_payout", null, null);
         assertThat(csv).contains("sequence_number,id,trace_id").contains("cust-888");
+
+        // FR7: the export honours the same rule filter as the search
+        String ruleCsv = auditTrailService.exportAuditLogsAsCsv(
+                null, "support-bot", "cust-888", null, null, "allow-high-risk-payout-with-human-approval");
+        assertThat(ruleCsv.lines().skip(1).toList())
+                .isNotEmpty()
+                .allMatch(row -> row.contains(",allow-high-risk-payout-with-human-approval,"));
+        assertThat(auditTrailService.exportAuditLogsAsCsv(
+                null, "support-bot", "cust-888", null, null, "no-such-rule").lines().count()).isEqualTo(1);
 
         AuditChainVerificationReport intactReport = auditTrailService.verifyChainIntegrity();
         assertThat(intactReport.intact()).isTrue();
@@ -1132,7 +1148,7 @@ class AgentGateQualityAttributesIntegrationTest {
         awaitTrue(Duration.ofSeconds(30), policyEngineService::isPolicyStoreReachable);
         // The call made during the outage is hash-chained once the database is back (FR7)
         awaitTrue(Duration.ofSeconds(30), () -> !auditTrailService.searchAuditLogs(
-                "support-bot", "cust-qa4-outage", "lookup_order", "EXECUTED", null, PageRequest.of(0, 5)).isEmpty());
+                null, "support-bot", "cust-qa4-outage", "lookup_order", "EXECUTED", null, PageRequest.of(0, 5)).isEmpty());
         assertThat(auditTrailService.verifyChainIntegrity().intact()).isTrue();
     }
 
@@ -1213,7 +1229,7 @@ class AgentGateQualityAttributesIntegrationTest {
 
         // Each rejected attempt is in the audit trail under the token's user (FR7)
         Page<AuditLogResponse> rejected = auditTrailService.searchAuditLogs(
-                "support-bot", "cust-bound-1", "lookup_order", "REJECTED_DELEGATED_USER_MISMATCH", null, PageRequest.of(0, 10));
+                null, "support-bot", "cust-bound-1", "lookup_order", "REJECTED_DELEGATED_USER_MISMATCH", null, PageRequest.of(0, 10));
         assertThat(rejected.getTotalElements()).isEqualTo(2);
     }
 

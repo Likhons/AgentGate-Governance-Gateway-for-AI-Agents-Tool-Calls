@@ -47,6 +47,20 @@ const AgentGateUI = (() => {
         description: 'Draft: lower the refund cap to 1,000 BDT'
     }];
 
+    // QA3/FR7: audit search fields, keyed by the /api/v1/audit query parameter they fill
+    const AUDIT_FILTERS = {
+        callId: 'audit-callid-filter',
+        agentClientId: 'audit-agent-filter',
+        delegatedUserId: 'audit-user-filter',
+        toolName: 'audit-tool-filter',
+        outcome: 'audit-outcome-filter',
+        policyRuleName: 'audit-rule-filter'
+    };
+    const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const AUDIT_PAGE_SIZE = 20;
+    let auditPageIndex = 0;
+    let lastCallId = null;
+
     function getAuthHeader() {
         return sessionStorage.getItem(STORAGE_KEY);
     }
@@ -306,6 +320,9 @@ const AgentGateUI = (() => {
     }
 
     function renderSimResult(status, outcome, rule, latency, payload, showApprovalJump) {
+        // QA3: a governed call returns its callId, which is also its audit record's id
+        lastCallId = payload && typeof payload.callId === 'string' ? payload.callId : null;
+        document.getElementById('audit-jump').style.display = lastCallId ? 'block' : 'none';
         const badge = document.getElementById('sim-status-badge');
         badge.textContent = `HTTP ${status}`;
         badge.className = 'badge ' + (status === 200 ? 'badge-ok' : status === 202 ? 'badge-warn' : 'badge-err');
@@ -514,24 +531,117 @@ const AgentGateUI = (() => {
         }
     }
 
+    /** QA3/FR7: the filled-in search fields as query parameters (exact matches, combined with AND). */
+    function auditFilterParams() {
+        const params = new URLSearchParams();
+        Object.entries(AUDIT_FILTERS).forEach(([param, id]) => {
+            const value = document.getElementById(id).value.trim();
+            if (value) params.set(param, value);
+        });
+        return params;
+    }
+
+    function searchAudit() {
+        auditPageIndex = 0;
+        return loadAudit();
+    }
+
+    function clearAuditSearch() {
+        Object.values(AUDIT_FILTERS).forEach(id => { document.getElementById(id).value = ''; });
+        return searchAudit();
+    }
+
+    function auditPage(delta) {
+        auditPageIndex = Math.max(0, auditPageIndex + delta);
+        return loadAudit();
+    }
+
     async function loadAudit() {
-        const agent = document.getElementById('audit-agent-filter').value.trim();
-        const url = agent
-            ? `/api/v1/audit?agentClientId=${encodeURIComponent(agent)}&page=0&size=20`
-            : '/api/v1/audit?page=0&size=20';
-        const r = await apiFetch(url);
-        if (!r.ok || !r.data) return;
+        const params = auditFilterParams();
+        const callId = params.get('callId');
+        if (callId && !UUID_PATTERN.test(callId)) {
+            showToast('Call ID must be the UUID returned by the gateway');
+            return;
+        }
+        params.set('page', String(auditPageIndex));
+        params.set('size', String(AUDIT_PAGE_SIZE));
+        const r = await apiFetch(`/api/v1/audit?${params}`);
+        if (!r.ok || !r.data) {
+            showToast(`Audit search failed (${r.status}): ${r.data?.detail || r.data?.title || 'request rejected'}`);
+            return;
+        }
+        const page = r.data;
+        const total = page.totalElements ?? 0;
+        const pages = page.totalPages ?? 0;
+        const filtered = [...auditFilterParams().keys()].length > 0;
+        document.getElementById('audit-count').textContent = filtered
+            ? `${total} matching record${total === 1 ? '' : 's'} (exact-match filters). Click a row for details.`
+            : `${total} record${total === 1 ? '' : 's'} in the audit trail. Click a row for details.`;
+        document.getElementById('audit-page').textContent = pages ? `page ${(page.number ?? 0) + 1} / ${pages}` : '';
+        document.getElementById('audit-newer').disabled = !pages || page.first !== false;
+        document.getElementById('audit-older').disabled = !pages || page.last !== false;
+
+        const rows = page.content || [];
         const tb = document.getElementById('audit-tbody');
-        tb.innerHTML = (r.data.content || []).map(e => `
-            <tr>
+        tb.innerHTML = rows.map(e => `
+            <tr class="audit-row" onclick="AgentGateUI.toggleAuditDetail(${Number(e.sequenceNumber)})" title="Show redacted arguments, approval and trace">
                 <td class="mono">#${e.sequenceNumber}</td>
                 <td><strong class="mono">${esc(e.agentClientId)}</strong><div style="font-size:11px;color:var(--ink-muted)">${esc(e.delegatedUserId || '—')}</div></td>
                 <td><strong>${esc(e.toolName)}</strong><div class="mono" style="font-size:11px;color:var(--ink-muted)">${esc(e.policyRuleName || '—')}@v${e.policyRuleVersion}</div></td>
-                <td><span class="badge ${e.outcome === 'EXECUTED' ? 'badge-ok' : e.outcome === 'HELD_FOR_APPROVAL' ? 'badge-warn' : 'badge-err'}">${esc(e.outcome)}</span>
+                <td><span class="badge ${e.outcome === 'EXECUTED' || e.outcome === 'APPROVED_EXECUTED' ? 'badge-ok' : e.outcome === 'HELD_FOR_APPROVAL' ? 'badge-warn' : 'badge-err'}">${esc(e.outcome)}</span>
                     <span class="mono" style="margin-left:6px;font-size:11px;">${e.latencyMs}ms</span></td>
                 <td><div class="hash-link">${esc(String(e.previousHash || '').slice(0, 10))} → <strong>${esc(String(e.entryHash || '').slice(0, 12))}</strong></div></td>
             </tr>
-        `).join('') || '<tr><td colspan="5">No audit entries found.</td></tr>';
+            ${auditDetailRow(e)}
+        `).join('') || `<tr><td colspan="5">${filtered ? 'No audit entries match these filters.' : 'No audit entries found.'}</td></tr>`;
+        if (rows.length === 1 && callId) {
+            toggleAuditDetail(Number(rows[0].sequenceNumber));
+        }
+    }
+
+    /** QA3: who, on whose behalf, what it did (redacted arguments) and which rule decided it. */
+    function auditDetailRow(e) {
+        let args = e.redactedArgumentsJson || '{}';
+        try {
+            args = JSON.stringify(JSON.parse(args), null, 2);
+        } catch {
+            // keep the stored text as it is
+        }
+        const approval = e.approvalId ? `${e.approvalId} (${e.approvalState || '—'})` : '—';
+        const when = e.occurredAt ? new Date(e.occurredAt).toLocaleString() : '—';
+        return `
+            <tr class="audit-detail" id="audit-detail-${Number(e.sequenceNumber)}" hidden>
+                <td colspan="5">
+                    <div class="audit-detail-grid">
+                        <div><div class="meta-k">Call ID</div><div class="mono hash-full">${esc(e.id)}</div></div>
+                        <div><div class="meta-k">Trace ID</div><div class="mono hash-full">${esc(e.traceId || '—')}</div></div>
+                        <div><div class="meta-k">Time</div><div class="mono" title="${esc(e.occurredAt)}">${esc(when)}</div></div>
+                        <div><div class="meta-k">Approval</div><div class="mono hash-full">${esc(approval)}</div></div>
+                    </div>
+                    <div class="meta-k">Redacted Arguments</div>
+                    <pre class="code-well audit-args">${esc(args)}</pre>
+                    <div class="meta-k">Entry Hash</div>
+                    <div class="mono hash-full">${esc(e.entryHash)}</div>
+                </td>
+            </tr>`;
+    }
+
+    function toggleAuditDetail(sequenceNumber) {
+        const row = document.getElementById(`audit-detail-${sequenceNumber}`);
+        if (row) row.hidden = !row.hidden;
+    }
+
+    /** QA3: jumps from a governed call in the simulator to its audit record. */
+    async function findCallInAudit() {
+        if (!lastCallId) return;
+        if (!getAuthHeader()) {
+            showToast('Unlock the Operator Console to search the audit trail');
+            return;
+        }
+        Object.values(AUDIT_FILTERS).forEach(id => { document.getElementById(id).value = ''; });
+        document.getElementById('audit-callid-filter').value = lastCallId;
+        switchTab('audit');
+        await searchAudit();
     }
 
     async function verifyAuditChain(quiet = false) {
@@ -550,7 +660,15 @@ const AgentGateUI = (() => {
     }
 
     async function downloadAuditCsv() {
-        const r = await apiFetch('/api/v1/audit/export');
+        // FR7: export exactly what the current search matches (all pages)
+        const params = auditFilterParams();
+        const callId = params.get('callId');
+        if (callId && !UUID_PATTERN.test(callId)) {
+            showToast('Call ID must be the UUID returned by the gateway');
+            return;
+        }
+        const query = params.toString();
+        const r = await apiFetch(`/api/v1/audit/export${query ? `?${query}` : ''}`);
         if (!r.ok) {
             showToast('CSV export failed');
             return;
@@ -559,7 +677,7 @@ const AgentGateUI = (() => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'agentgate-audit.csv';
+        a.download = query ? 'agentgate-audit-filtered.csv' : 'agentgate-audit.csv';
         a.click();
         URL.revokeObjectURL(url);
     }
@@ -587,6 +705,11 @@ const AgentGateUI = (() => {
         loadApprovals,
         decideApproval,
         loadAudit,
+        searchAudit,
+        clearAuditSearch,
+        auditPage,
+        toggleAuditDetail,
+        findCallInAudit,
         verifyAuditChain,
         downloadAuditCsv
     };

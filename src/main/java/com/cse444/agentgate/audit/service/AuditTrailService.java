@@ -341,9 +341,11 @@ public class AuditTrailService {
 
     /**
      * FR7 & QA3: Multi-criteria paginated search so an auditor finds any call in seconds.
+     * {@code callId} is the id the gateway returns to the agent, which is also the audit entry's id.
      */
     @Transactional(readOnly = true)
     public Page<AuditLogResponse> searchAuditLogs(
+            UUID callId,
             String agentClientId,
             String delegatedUserId,
             String toolName,
@@ -353,23 +355,25 @@ public class AuditTrailService {
     ) {
         flushPendingAudits();
         Specification<AuditLogEntry> spec = buildSearchSpecification(
-                agentClientId, delegatedUserId, toolName, outcome, policyRuleName);
+                callId, agentClientId, delegatedUserId, toolName, outcome, policyRuleName);
         return auditRepository.findAll(spec, pageable).map(AuditLogResponse::from);
     }
 
     /**
-     * FR7: Exports matching audit records as CSV for compliance reporting.
+     * FR7: Exports the records that match the same criteria as {@link #searchAuditLogs} as CSV.
      */
     @Transactional(readOnly = true)
     public String exportAuditLogsAsCsv(
+            UUID callId,
             String agentClientId,
             String delegatedUserId,
             String toolName,
-            String outcome
+            String outcome,
+            String policyRuleName
     ) {
         flushPendingAudits();
         Specification<AuditLogEntry> spec = buildSearchSpecification(
-                agentClientId, delegatedUserId, toolName, outcome, null);
+                callId, agentClientId, delegatedUserId, toolName, outcome, policyRuleName);
         List<AuditLogEntry> rows = auditRepository.findAll(spec);
 
         StringBuilder csv = new StringBuilder();
@@ -395,6 +399,7 @@ public class AuditTrailService {
     }
 
     private Specification<AuditLogEntry> buildSearchSpecification(
+            UUID callId,
             String agentClientId,
             String delegatedUserId,
             String toolName,
@@ -403,6 +408,9 @@ public class AuditTrailService {
     ) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
+            if (callId != null) {
+                predicates.add(cb.equal(root.get("id"), callId));
+            }
             if (agentClientId != null && !agentClientId.isBlank()) {
                 predicates.add(cb.equal(root.get("agentClientId"), agentClientId));
             }

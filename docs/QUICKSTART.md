@@ -97,6 +97,10 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/gateway/appr
 
 # 4. Verify Hash-Chained Audit Trail Integrity (FR7, QA3)
 curl -u "$ADMIN" http://localhost:8080/api/v1/audit/verify
+
+# 5. Find one call: the callId in the gateway response is its audit record's id (QA3); the same
+#    filters (callId, agentClientId, delegatedUserId, toolName, outcome, policyRuleName) work on /export
+curl -u "$ADMIN" "http://localhost:8080/api/v1/audit?callId=<callId>"
 ```
 
 New and edited tools appear on the MCP endpoint within `agentgate.mcp.tool-sync-interval` (5 s)
@@ -196,3 +200,6 @@ The QA4 drill pauses the `agentgate-postgres` container for a few seconds and un
 23. **Case 23 — The Dashboard Playground Could Not Test Draft Policies (`FR9`):**
     - *Issue Found:* FR9 asks to test a sample call "against current or draft policies". The API accepted `draftRules`, but the dashboard's "Test Policy Playground" button always sent the call without them, so drafts could only be tried with curl or Swagger; a rejected playground request (for example `400`) was also shown as `PLAYGROUND: undefined`.
     - *Fix Applied:* The simulator has an optional "Draft rules for the playground" box (a JSON array, never saved) with a sample that lowers the refund cap to 1,000 BDT. When it is filled, the playground evaluates the drafts instead of the active policies and labels the result `PLAYGROUND (DRAFT)` or `PLAYGROUND (ACTIVE)`; a draft without a numeric `priority` is caught in the browser, and server errors such as `draftRules[0].conditions[0].operator: must not be null` are shown. Checked in a browser against the live stack: the 1,200 BDT refund is `ALLOW` by `allow-refund-up-to-2000-bdt@v5` and `DENY` (`DEFAULT_DENY`) with the sample draft.
+24. **Case 24 — The Dashboard Could Only Filter the Audit Trail by Agent (`QA3`, `FR7`):**
+    - *Issue Found:* QA3 asks that an auditor finds who made a call, on whose behalf, what it did and which rule allowed it in under a minute. The API searched by agent, user, tool, outcome and rule, but the dashboard offered only an agent box and showed the latest 20 rows without the redacted arguments or approval; there was no way to look up the `callId` the agent receives, and the CSV export ignored the rule filter, so a rule-filtered export returned every rule.
+    - *Fix Applied:* `GET /api/v1/audit` and `/export` accept `callId` (the gateway's call id is the audit record's id), and the export honours `policyRuleName`. The audit tab has Call ID, agent, user, tool, outcome and rule fields, a match count with paging, a details row (call and trace id, time, approval, redacted arguments, full entry hash), and "Export Matching CSV"; the simulator links a governed call to its audit record. `qa3AuditTrailDetectsTampering` now finds the held call by its `callId` and checks the rule-filtered export; full suite 38/38. Checked in a browser against the live stack (36,764 records, 1 match by call id, paging, combined filters).

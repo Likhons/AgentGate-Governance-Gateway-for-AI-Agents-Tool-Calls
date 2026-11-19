@@ -16,6 +16,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
  * REST Controller for Searching, Exporting, and Verifying the Tamper-Evident Audit Trail (FR7, QA3).
  */
@@ -32,8 +34,9 @@ public class AuditTrailController {
     }
 
     @GetMapping
-    @Operation(summary = "Search paginated hash-chained audit records by agent, user, tool, outcome, or rule (FR7, QA3)")
+    @Operation(summary = "Search paginated hash-chained audit records by call ID, agent, user, tool, outcome, or rule (FR7, QA3)")
     public Page<AuditLogResponse> searchAuditLogs(
+            @RequestParam(required = false) UUID callId,
             @RequestParam(required = false) String agentClientId,
             @RequestParam(required = false) String delegatedUserId,
             @RequestParam(required = false) String toolName,
@@ -42,7 +45,7 @@ public class AuditTrailController {
             @PageableDefault(size = 20, sort = "sequenceNumber", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         return auditTrailService.searchAuditLogs(
-                agentClientId, delegatedUserId, toolName, outcome, policyRuleName, pageable);
+                callId, agentClientId, delegatedUserId, toolName, outcome, policyRuleName, pageable);
     }
 
     @GetMapping("/verify")
@@ -52,13 +55,16 @@ public class AuditTrailController {
     }
 
     @GetMapping(value = "/export", produces = "text/csv")
-    @Operation(summary = "Export matching audit trail records as CSV (FR7)")
+    @Operation(summary = "Export audit trail records matching the same filters as the search as CSV (FR7)")
     public String exportCsv(
+            @RequestParam(required = false) UUID callId,
             @RequestParam(required = false) String agentClientId,
             @RequestParam(required = false) String delegatedUserId,
             @RequestParam(required = false) String toolName,
-            @RequestParam(required = false) String outcome
+            @RequestParam(required = false) String outcome,
+            @RequestParam(required = false) String policyRuleName
     ) {
-        return auditTrailService.exportAuditLogsAsCsv(agentClientId, delegatedUserId, toolName, outcome);
+        return auditTrailService.exportAuditLogsAsCsv(
+                callId, agentClientId, delegatedUserId, toolName, outcome, policyRuleName);
     }
 }

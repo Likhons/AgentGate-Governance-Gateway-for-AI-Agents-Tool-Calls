@@ -197,6 +197,7 @@ Script-টা নিজেই unpause করে, আর কোনো কার�
 **ADR-004: HMAC-SHA256 hash-chained audit, `@TransactionalEventListener(AFTER_COMPLETION)` + `REQUIRES_NEW`**
 - কারণ: rollback হওয়া (block হওয়া) call-ও audit-এ থেকে যায়। HMAC-এর key DB-তে নয়, environment-এ থাকে। তাই কারও কাছে DB credential থাকলেও সে নতুন hash হিসাব করতে পারবে না।
 - সংখ্যা: live `/api/v1/audit/verify`, 2026-11-19-এ 36,740টা record intact।
+- QA3 UI demo (৩০ সেকেন্ড): dashboard-এ "Execute Governed Call", তারপর "Find this call in the audit trail"। ঠিক ওই call-টার record খোলে, যাতে থাকে agent, কোন user-এর পক্ষে, redacted arguments আর কোন rule সিদ্ধান্ত দিয়েছে। সাথে Audit tab-এ user, tool, outcome বা rule দিয়ে search করা যায়।
 - Demo: `curl -s -u "$ADMIN" http://localhost:8080/api/v1/audit/verify`। Tamper দেখাতে হলে **Testcontainers test** চালান:
   `--tests "com.cse444.agentgate.AgentGateQualityAttributesIntegrationTest.qa3AuditTrailDetectsTampering"`
   (Compile আর container start সহ মোট ≈ 71 s, test নিজে 2 s)। শেষে Hikari বা `eventPublicationRegistry`-এর কিছু WARN log আসে। এগুলো container বন্ধ হওয়ার সময়কার স্বাভাবিক log, `BUILD SUCCESSFUL` দেখলেই হবে।

@@ -49,6 +49,8 @@
   - `POST /api/v1/policies` and the playground's draft rules reject a condition without a field, operator or expected value with `400 Bean Validation Failed`. Covered by `WebSecurityAndProblemDetailsSliceTest#incompletePolicyConditionsAreRejectedWith400`; full suite 38/38.
 - **Step 14 — FR9 Draft Policies in the Dashboard Playground (2026-11-19, AI-Usage Log Case 23):**
   - The simulator's optional "Draft rules" box sends `draftRules` to the playground, so a sample call can be tested against draft policies from the dashboard as well as the API; results are labelled DRAFT or ACTIVE and request errors are shown.
+- **Step 15 — QA3 Audit Search in the Dashboard (2026-11-19, AI-Usage Log Case 24):**
+  - The audit API and CSV export accept `callId` and the same filters; the dashboard's audit tab searches by call ID, agent, user, tool, outcome and rule with paging and per-call details, and the simulator links a call to its audit record.
 
 ## 2. Current State of the Application
 - Full test suite (unit, slice, ArchUnit/Modulith, and Testcontainers PostgreSQL + Redis integration tests) is **38/38 passing** (`0` failures, `0` skipped) as of 2026-11-19.

@@ -203,6 +203,10 @@
                     <button class="btn btn-sm" style="margin-left:8px;" type="button" onclick="AgentGateUI.switchTab('approvals')">Open Approval Queue →</button>
                 </div>
 
+                <div id="audit-jump" style="display:none; margin-bottom:10px;">
+                    <button class="btn btn-sm" type="button" onclick="AgentGateUI.findCallInAudit()">Find this call in the audit trail (QA3) →</button>
+                </div>
+
                 <pre id="sim-output" class="code-well">Click "Execute Governed Call" to run a real request through AgentGate.</pre>
             </div>
         </div>
@@ -344,10 +348,63 @@
                     <p class="card-sub">Sequential HMAC-SHA256 hash chain over every allowed, blocked, and held tool call.</p>
                 </div>
                 <div class="btn-row" style="margin-top:0;">
-                    <input id="audit-agent-filter" type="text" placeholder="Filter agent..." style="width:140px;" onkeydown="if(event.key==='Enter') AgentGateUI.loadAudit()">
-                    <button class="btn btn-sm" type="button" onclick="AgentGateUI.loadAudit()">Filter</button>
                     <button class="btn btn-ok btn-sm" type="button" onclick="AgentGateUI.verifyAuditChain()">Verify Integrity</button>
-                    <button class="btn btn-sm" type="button" onclick="AgentGateUI.downloadAuditCsv()">Export CSV</button>
+                    <button class="btn btn-sm" type="button" onclick="AgentGateUI.downloadAuditCsv()">Export Matching CSV</button>
+                </div>
+            </div>
+
+            <form id="audit-search" class="audit-filters" onsubmit="event.preventDefault(); AgentGateUI.searchAudit();">
+                <div class="audit-filter-wide">
+                    <label class="field-label" for="audit-callid-filter">Call ID</label>
+                    <input id="audit-callid-filter" class="mono" type="text" placeholder="callId from the gateway response">
+                </div>
+                <div>
+                    <label class="field-label" for="audit-agent-filter">Agent</label>
+                    <input id="audit-agent-filter" type="text" placeholder="e.g. support-bot">
+                </div>
+                <div>
+                    <label class="field-label" for="audit-user-filter">On Behalf Of User</label>
+                    <input id="audit-user-filter" type="text" placeholder="e.g. cust-100">
+                </div>
+                <div>
+                    <label class="field-label" for="audit-tool-filter">Tool</label>
+                    <input id="audit-tool-filter" type="text" placeholder="e.g. issue_refund">
+                </div>
+                <div>
+                    <label class="field-label" for="audit-outcome-filter">Outcome</label>
+                    <input id="audit-outcome-filter" type="text" list="audit-outcomes" placeholder="Any outcome">
+                </div>
+                <div>
+                    <label class="field-label" for="audit-rule-filter">Deciding Rule</label>
+                    <input id="audit-rule-filter" type="text" placeholder="e.g. allow-refund-up-to-2000-bdt">
+                </div>
+                <div class="audit-filter-actions">
+                    <button class="btn btn-primary btn-sm" type="submit">Search</button>
+                    <button class="btn btn-sm" type="button" onclick="AgentGateUI.clearAuditSearch()">Clear</button>
+                </div>
+            </form>
+            <datalist id="audit-outcomes">
+                <option value="EXECUTED"></option>
+                <option value="HELD_FOR_APPROVAL"></option>
+                <option value="DENIED_BY_POLICY"></option>
+                <option value="REJECTED_BY_GUARD"></option>
+                <option value="RATE_LIMITED"></option>
+                <option value="KILL_SWITCH_BLOCKED"></option>
+                <option value="REJECTED_DELEGATED_USER_MISMATCH"></option>
+                <option value="BLOCKED_OR_FAILED"></option>
+                <option value="APPROVED_EXECUTED"></option>
+                <option value="APPROVED_EXECUTION_FAILED"></option>
+                <option value="APPROVAL_REJECTED"></option>
+                <option value="APPROVAL_TIMED_OUT"></option>
+                <option value="APPROVAL_CANCELLED_BY_KILL_SWITCH"></option>
+            </datalist>
+
+            <div class="audit-pager">
+                <span id="audit-count" class="card-sub">Exact-match filters. Click a row for its redacted arguments, approval and trace.</span>
+                <div class="audit-pager-nav">
+                    <button id="audit-newer" class="btn btn-sm" type="button" onclick="AgentGateUI.auditPage(-1)" disabled>← Newer</button>
+                    <span id="audit-page" class="mono"></span>
+                    <button id="audit-older" class="btn btn-sm" type="button" onclick="AgentGateUI.auditPage(1)" disabled>Older →</button>
                 </div>
             </div>
 
