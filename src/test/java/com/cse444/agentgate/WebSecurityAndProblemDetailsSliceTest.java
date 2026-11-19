@@ -42,9 +42,12 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -219,6 +222,40 @@ class WebSecurityAndProblemDetailsSliceTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string("WWW-Authenticate", "Basic realm=\"AgentGate\""))
                 .andExpect(jsonPath("$.status").value(401));
+    }
+
+    @Test
+    @DisplayName("C3/FR3 Validation: Policy conditions without a field, operator or expected value are rejected with 400")
+    void incompletePolicyConditionsAreRejectedWith400() throws Exception {
+        // A condition without an operator would otherwise be stored and fail closed at every evaluation
+        mockMvc.perform(post("/api/v1/policies")
+                        .with(httpBasic("user", "test-admin-pass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"ruleName":"allow-refund-up-to-2000-bdt","priority":20,"agentPattern":"support-bot",
+                                 "toolPattern":"issue_refund","effect":"ALLOW","dryRun":false,
+                                 "conditions":[{"field":"amount","expectedValue":"2000"}]}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Bean Validation Failed"))
+                .andExpect(jsonPath("$.detail").value(containsString("conditions[0].operator")));
+
+        // Playground draft rules are validated the same way (a blank field and a null condition)
+        mockMvc.perform(post("/api/v1/policies/playground")
+                        .with(httpBasic("user", "test-admin-pass"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"agentClientId":"support-bot","toolName":"issue_refund","arguments":{"amount":10},
+                                 "draftRules":[{"ruleName":"draft","priority":20,"agentPattern":"support-bot",
+                                  "toolPattern":"issue_refund","effect":"ALLOW","dryRun":false,
+                                  "conditions":[{"field":" ","operator":"LTE","expectedValue":"2000"}, null]}]}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value(containsString("draftRules[0].conditions[0].field")))
+                .andExpect(jsonPath("$.detail").value(containsString("draftRules[0].conditions[1]")));
+
+        verify(policyEngineService, never()).createOrVersionPolicyRule(any(), any());
+        verify(policyEngineService, never()).simulateInPlayground(any());
     }
 
     private String issueTestJwt(String clientId, String delegatedUser) {

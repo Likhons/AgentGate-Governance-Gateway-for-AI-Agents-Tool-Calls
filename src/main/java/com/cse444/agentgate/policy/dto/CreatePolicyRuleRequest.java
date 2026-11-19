@@ -2,6 +2,7 @@ package com.cse444.agentgate.policy.dto;
 
 import com.cse444.agentgate.policy.domain.PolicyCondition;
 import com.cse444.agentgate.shared.domain.PolicyEffect;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -27,7 +28,7 @@ public record CreatePolicyRuleRequest(
         @NotNull
         PolicyEffect effect,
 
-        List<PolicyCondition> conditions,
+        List<@NotNull @Valid PolicyCondition> conditions,
 
         boolean dryRun,
 
